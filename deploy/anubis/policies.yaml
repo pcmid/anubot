@@ -1,0 +1,12 @@
+bots:
+  - name: verification-endpoints
+    action: CHALLENGE
+    expression:
+      all:
+        - path.startsWith("/")
+    challenge:
+      algorithm: fast
+      difficulty: 5
+      report_as: 4
+
+dnsbl: false

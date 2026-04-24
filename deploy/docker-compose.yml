@@ -1,0 +1,41 @@
+services:
+  anubot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ghcr.io/pcmid/anubot:latest
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:?BOT_TOKEN is required}
+      DATABASE_URL: sqlite:/data/db.sqlite?mode=rwc
+      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is required}
+      LISTEN_ADDR: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./data:/data
+    networks:
+      - anubisnet
+    expose:
+      - "8080"
+
+  anubis:
+    image: ghcr.io/techarohq/anubis:latest
+    restart: unless-stopped
+    depends_on:
+      - anubot
+    environment:
+      BIND: :8923
+      TARGET: http://anubot:8080
+      POLICY_FNAME: /policies/policies.yaml
+      SERVE_ROBOTS_TXT: "true"
+      USE_REMOTE_ADDRESS: "false"
+    volumes:
+      - ./anubis/policies.yaml:/policies/policies.yaml:ro
+    networks:
+      - anubisnet
+    ports:
+      - "127.0.0.1:8923:8923"
+
+networks:
+  anubisnet:
+    driver: bridge
