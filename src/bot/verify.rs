@@ -7,10 +7,7 @@ use teloxide::types::{
 };
 use url::Url;
 
-use crate::bot::text::{
-    DEFAULT_BUTTON_LABEL, DEFAULT_DM_BUTTON_LABEL, DEFAULT_DM_VERIFICATION_TEXT,
-    DEFAULT_GROUP_VERIFICATION_TEXT, DM_NO_PENDING, fill,
-};
+use crate::bot::text::*;
 use crate::bot::{Bot, HandlerError};
 use crate::db::{group, session};
 use crate::util::time::now_epoch;
@@ -45,7 +42,6 @@ async fn verification(
         return Ok(());
     }
 
-    // 幂等:已有活跃 session 就跳过(比如重复事件)
     if session::find_active(bot.db(), chat_id, user_id)
         .await?
         .is_some()
@@ -53,7 +49,6 @@ async fn verification(
         return Ok(());
     }
 
-    // 禁言失败(admin / 权限不足)直接放弃,不发消息
     if let Err(err) = bot.restrict_member(chat_id, user_id).await {
         tracing::warn!(
             chat_id, user_id, error = %err,
@@ -76,10 +71,6 @@ async fn verification(
         template,
         &[("chat", chat_title), ("timeout", &timeout_minutes)],
     );
-    // Deep link: clicking takes the user to their own private chat with the
-    // bot, where Telegram will push `/start <chat_id>` once they tap Start.
-    // Only that private chat's recipient (by Telegram-authenticated from.id)
-    // can retrieve the actual /app/... URL.
     let verify_url = Url::parse(&format!(
         "https://t.me/{}?start={}",
         bot.bot_username(),
@@ -132,23 +123,40 @@ async fn verification(
     Ok(())
 }
 
-/// Parse the payload of a `/start <chat_id>` message. Accepts `/start@BotName`
-/// as well as plain `/start`. Returns the chat_id as i64 on success.
-pub fn parse_start_payload(text: &str) -> Option<i64> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartPayload {
+    Verify(i64),
+    Settings(i64),
+}
+
+pub fn parse_start_payload(text: &str) -> Option<StartPayload> {
     let text = text.trim();
     let (head, rest) = text.split_once(char::is_whitespace)?;
     let head = head.split_once('@').map(|(c, _)| c).unwrap_or(head);
     if head != "/start" {
         return None;
     }
-    rest.trim().parse::<i64>().ok()
+    let rest = rest.trim();
+    if let Some(suffix) = rest.strip_prefix("settings_") {
+        return suffix.parse::<i64>().ok().map(StartPayload::Settings);
+    }
+    rest.parse::<i64>().ok().map(StartPayload::Verify)
 }
 
-/// Private-chat `/start <chat_id>` handler. Only the user who was actually
-/// restricted on `chat_id` has a matching pending session (Telegram guarantees
-/// `from.id` authenticity), so the /app/... URL we send back is visible only
-/// to the legitimate verifier.
-pub async fn on_start_dm(msg: Message, chat_id: i64, bot: Arc<Bot>) -> Result<(), HandlerError> {
+pub async fn on_start_dm(
+    msg: Message,
+    payload: StartPayload,
+    bot: Arc<Bot>,
+) -> Result<(), HandlerError> {
+    match payload {
+        StartPayload::Verify(chat_id) => on_verify_start(msg, chat_id, bot).await,
+        StartPayload::Settings(chat_id) => {
+            crate::bot::settings::on_settings_main(msg, chat_id, bot).await
+        }
+    }
+}
+
+async fn on_verify_start(msg: Message, chat_id: i64, bot: Arc<Bot>) -> Result<(), HandlerError> {
     let Some(from) = msg.from.as_ref() else {
         return Ok(());
     };
@@ -184,7 +192,6 @@ pub async fn on_start_dm(msg: Message, chat_id: i64, bot: Arc<Bot>) -> Result<()
     Ok(())
 }
 
-/// 启动恢复:把 DB 里仍处于 Pending 的 session 重新挂上超时协程。
 pub async fn resume_pending(bot: &Arc<Bot>) -> Result<(), DbErr> {
     let rows = session::find_all_active(bot.db()).await?;
     for row in rows {
@@ -199,9 +206,6 @@ pub async fn resume_pending(bot: &Arc<Bot>) -> Result<(), DbErr> {
     Ok(())
 }
 
-/// 睡到 `expires_at` 然后原子把 session 状态从 Pending 翻成 Expired,
-/// 翻成功了才执行 kick + delete。中途 web 端验证成功会把状态改成 Verified,
-/// 此时原子 UPDATE 匹配不到行,协程静默退出。
 pub fn spawn_expiry_task(
     bot: Arc<Bot>,
     chat_id: i64,

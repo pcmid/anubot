@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 
+use crate::bot::text::*;
 use crate::db::session::{self, SessionStatus};
 use crate::util::time::now_epoch;
 use crate::web::AppState;
@@ -14,11 +15,11 @@ pub async fn app_page(
 
     let session = match session::find_active(bot.db(), chat_id, user_id).await {
         Ok(Some(s)) => s,
-        Ok(None) => return page(StatusCode::NOT_FOUND, "该验证链接无效,请返回群组重新申请。"),
-        Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, "服务异常,请稍后再试。"),
+        Ok(None) => return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID),
+        Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     };
     if session.status != SessionStatus::Pending || session.expires_at <= now {
-        return page(StatusCode::GONE, "本次验证已失效,请返回群组重新申请。");
+        return page(StatusCode::GONE, WEB_VERIFY_EXPIRED);
     }
 
     if let Err(err) = bot.unrestrict_member(chat_id, user_id).await {
@@ -27,7 +28,7 @@ pub async fn app_page(
         );
         return page(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "解除禁言失败,请稍后再试。",
+            WEB_VERIFY_UNRESTRICT_FAILED,
         );
     }
 
@@ -36,10 +37,10 @@ pub async fn app_page(
             if let Some(msg_id) = session.verify_msg_id {
                 let _ = bot.delete_message(chat_id, msg_id).await;
             }
-            page(StatusCode::OK, "验证通过,请返回群组。")
+            page(StatusCode::OK, WEB_VERIFY_OK)
         }
-        Ok(false) => page(StatusCode::GONE, "本次验证已失效,请返回群组重新申请。"),
-        Err(_) => page(StatusCode::INTERNAL_SERVER_ERROR, "服务异常,请稍后再试。"),
+        Ok(false) => page(StatusCode::GONE, WEB_VERIFY_EXPIRED),
+        Err(_) => page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     }
 }
 
@@ -54,7 +55,7 @@ fn render(msg: &str) -> String {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Anubot 验证</title>
+<title>{WEB_VERIFY_TITLE}</title>
 <style>
 body {{ font-family: -apple-system,BlinkMacSystemFont,sans-serif; padding: 24px; }}
 main {{ text-align: center; margin-top: 48px; font-size: 17px; }}

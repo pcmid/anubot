@@ -4,6 +4,7 @@ use sea_orm::{
     PaginatorTrait,
     sea_query::{Expr, OnConflict},
 };
+use sea_orm::{QuerySelect, SelectColumns};
 
 use crate::util::time::now_epoch;
 
@@ -32,6 +33,8 @@ pub struct Model {
     pub expires_at: i64,
     pub created_at: i64,
     pub verified_at: Option<i64>,
+    pub message_counts: i64,
+    pub spam_counts: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -60,6 +63,8 @@ pub async fn create(db: &DatabaseConnection, s: NewSession<'_>) -> Result<(), Db
         expires_at: Set(s.expires_at),
         created_at: Set(now_epoch()),
         verified_at: Set(None),
+        message_counts: Set(0),
+        spam_counts: Set(0),
     };
     Entity::insert(row)
         .on_conflict(
@@ -72,6 +77,8 @@ pub async fn create(db: &DatabaseConnection, s: NewSession<'_>) -> Result<(), Db
                     Column::ExpiresAt,
                     Column::CreatedAt,
                     Column::VerifiedAt,
+                    Column::MessageCounts,
+                    Column::SpamCounts,
                 ])
                 .to_owned(),
         )
@@ -93,9 +100,19 @@ pub async fn find_active(
         .await
 }
 
-/// 原子地把 `(chat_id, user_id)` 对应 session 的状态从 Pending 翻成 Expired。
-/// 返回 `true` 表示真正翻转了（调用方应继续 kick/delete）；`false` 表示
-/// session 已 Verified/Expired 或不存在，调用方不应再执行后续动作。
+pub async fn find_verified(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    user_id: i64,
+) -> Result<Option<Model>, DbErr> {
+    Entity::find()
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .one(db)
+        .await
+}
+
 pub async fn mark_expired_if_pending(
     db: &DatabaseConnection,
     chat_id: i64,
@@ -128,7 +145,6 @@ pub async fn mark_verified(
     Ok(res.rows_affected == 1)
 }
 
-/// 启动时恢复用：返回所有仍处于 Pending 的 session。
 pub async fn find_all_active(db: &DatabaseConnection) -> Result<Vec<Model>, DbErr> {
     Entity::find()
         .filter(Column::Status.eq(SessionStatus::Pending))
@@ -136,7 +152,51 @@ pub async fn find_all_active(db: &DatabaseConnection) -> Result<Vec<Model>, DbEr
         .await
 }
 
-/// Count sessions in `chat_id` with the given `status` whose `created_at >= since`.
+pub async fn increment_message_count_if_verified(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    user_id: i64,
+) -> Result<bool, DbErr> {
+    let res = Entity::update_many()
+        .col_expr(
+            Column::MessageCounts,
+            Expr::col(Column::MessageCounts).add(1),
+        )
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .exec(db)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+pub async fn increment_spam_count_if_verified(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    user_id: i64,
+) -> Result<Option<i64>, DbErr> {
+    let res = Entity::update_many()
+        .col_expr(Column::SpamCounts, Expr::col(Column::SpamCounts).add(1))
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .exec(db)
+        .await?;
+    if res.rows_affected != 1 {
+        return Ok(None);
+    }
+    let new_value: Option<i64> = Entity::find()
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .select_only()
+        .select_column(Column::SpamCounts)
+        .into_tuple()
+        .one(db)
+        .await?;
+    Ok(new_value)
+}
+
 pub async fn count_by_status_since(
     db: &DatabaseConnection,
     chat_id: i64,

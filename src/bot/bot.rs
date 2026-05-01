@@ -1,46 +1,46 @@
-use std::sync::Arc;
-
 use sea_orm::{DatabaseConnection, DbErr};
-use teloxide::dispatching::UpdateFilterExt;
+use std::sync::Arc;
+use teloxide::dispatching::{Dispatcher, ShutdownToken, UpdateFilterExt};
 use teloxide::payloads::{SendMessageSetters, SetMyCommandsSetters, UnbanChatMemberSetters};
 use teloxide::prelude::*;
 use teloxide::types::{
-    BotCommand, BotCommandScope, ChatId, ChatMemberUpdated, ChatPermissions, InlineKeyboardButton,
-    InlineKeyboardMarkup, Message, MessageId, ParseMode, ReplyParameters, Update, UserId,
+    BotCommand, BotCommandScope, CallbackQueryId, ChatId, ChatMemberUpdated, ChatPermissions,
+    ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, ParseMode,
+    ReplyParameters, Update, UserId,
 };
 use teloxide::{Bot as Teloxide, RequestError, dptree};
 use url::Url;
 
-use crate::bot::commands;
-use crate::bot::text::fill;
-use crate::bot::verify;
+use crate::bot::text::*;
+use crate::bot::{commands, settings, spam, verify};
 use crate::config::Config;
 
 pub struct Bot {
     tg: Teloxide,
     db: DatabaseConnection,
     public_url: String,
+    bot_user_id: UserId,
     bot_username: String,
 }
 
 impl Bot {
     pub async fn new(db: DatabaseConnection, cfg: &Config) -> Result<Self, RequestError> {
         let tg = Teloxide::new(&cfg.bot_token);
-        let bot_username = tg
-            .get_me()
-            .await?
-            .user
+        let me = tg.get_me().await?.user;
+        let bot_user_id = me.id;
+        let bot_username = me
             .username
             .clone()
             .expect("bot account must have a username");
 
         let admin_commands = vec![
-            BotCommand::new("enable", "启用本群的人机验证"),
-            BotCommand::new("disable", "停用本群的人机验证"),
-            BotCommand::new("set_timeout", "设置验证超时(秒,60-3600)"),
-            BotCommand::new("set_welcome", "自定义欢迎语(清空则恢复默认)"),
-            BotCommand::new("set_button", "自定义按钮文字(清空则恢复默认)"),
-            BotCommand::new("status", "查看本群验证状态"),
+            BotCommand::new("enable", CMD_ENABLE),
+            BotCommand::new("disable", CMD_DISABLE),
+            BotCommand::new("set_timeout", CMD_SET_TIMEOUT),
+            BotCommand::new("set_welcome", CMD_SET_WELCOME),
+            BotCommand::new("set_button", CMD_SET_BUTTON),
+            BotCommand::new("status", CMD_STATUS),
+            BotCommand::new("settings", CMD_SETTINGS),
         ];
         if let Err(err) = tg
             .set_my_commands(admin_commands)
@@ -57,6 +57,7 @@ impl Bot {
             tg,
             db,
             public_url: cfg.public_url.clone(),
+            bot_user_id,
             bot_username,
         })
     }
@@ -73,9 +74,11 @@ impl Bot {
         &self.bot_username
     }
 
-    /// Drive the teloxide dispatcher. Resumes any per-session expiry
-    /// coroutines first so a restart doesn't leave sessions stranded.
-    pub async fn run(self: Arc<Self>) {
+    pub fn bot_user_id(&self) -> UserId {
+        self.bot_user_id
+    }
+
+    pub async fn run(self: Arc<Self>) -> BotDispatcher {
         if let Err(err) = self.resume_pending_sessions().await {
             tracing::error!(
                 error = %err,
@@ -92,21 +95,41 @@ impl Bot {
             .branch(
                 Update::filter_message()
                     .filter(|m: Message| m.chat.is_private())
+                    .filter_map(|m: Message| settings::extract_settings_tag(&m))
+                    .endpoint(settings::on_settings_reply),
+            )
+            .branch(
+                Update::filter_message()
+                    .filter(|m: Message| m.chat.is_private())
                     .filter_map(|m: Message| m.text().and_then(verify::parse_start_payload))
                     .endpoint(verify::on_start_dm),
             )
+            .branch(Update::filter_callback_query().endpoint(settings::on_settings_callback))
             .branch(
                 Update::filter_chat_member()
                     .filter(|upd: ChatMemberUpdated| verify::is_new_member_join(&upd))
                     .endpoint(verify::on_member_join),
+            )
+            .branch(
+                Update::filter_message()
+                    .filter(|m: Message| !m.chat.is_private())
+                    .endpoint(spam::on_user_message),
             );
 
-        Dispatcher::builder(self.tg.clone(), handler)
+        let mut dispatcher = Dispatcher::builder(self.tg.clone(), handler)
             .dependencies(dptree::deps![self.clone()])
             .default_handler(|_upd| async {})
-            .build()
-            .dispatch()
-            .await
+            .build();
+
+        let shutdown_token = dispatcher.shutdown_token();
+        let dispatcher_task = tokio::spawn(async move {
+            dispatcher.dispatch().await;
+        });
+
+        BotDispatcher {
+            shutdown_token,
+            dispatcher_task,
+        }
     }
 
     pub async fn resume_pending_sessions(self: &Arc<Self>) -> Result<(), DbErr> {
@@ -168,8 +191,6 @@ impl Bot {
             .await
     }
 
-    /// Send a private message to `user_id`. `keyboard` is optional;
-    /// pass `None` for plain text (e.g. the "no pending verification" reply).
     pub async fn send_dm(
         &self,
         user_id: i64,
@@ -212,17 +233,76 @@ impl Bot {
             .reply_parameters(ReplyParameters::new(reply_to))
             .await
     }
+
+    pub async fn reply_with_keyboard(
+        &self,
+        chat: ChatId,
+        reply_to: MessageId,
+        text: &str,
+        keyboard: InlineKeyboardMarkup,
+    ) -> Result<Message, RequestError> {
+        self.tg
+            .send_message(chat, text)
+            .reply_parameters(ReplyParameters::new(reply_to))
+            .reply_markup(keyboard)
+            .await
+    }
+
+    pub async fn send_force_reply(
+        &self,
+        user_id: i64,
+        text: &str,
+    ) -> Result<Message, RequestError> {
+        self.tg
+            .send_message(to_user_id(user_id), text)
+            .reply_markup(
+                ForceReply::new().input_field_placeholder(FORCE_REPLY_PLACEHOLDER.to_string()),
+            )
+            .await
+    }
+
+    pub async fn answer_callback(&self, id: CallbackQueryId) -> Result<(), RequestError> {
+        self.tg.answer_callback_query(id).await.map(|_| ())
+    }
+
+    pub async fn answer_callback_with_text(
+        &self,
+        id: CallbackQueryId,
+        text: &str,
+    ) -> Result<(), RequestError> {
+        self.tg
+            .answer_callback_query(id)
+            .text(text)
+            .await
+            .map(|_| ())
+    }
 }
 
-// -------- helpers -----------------------------------------------------
+pub struct BotDispatcher {
+    shutdown_token: ShutdownToken,
+    dispatcher_task: tokio::task::JoinHandle<()>,
+}
+
+impl BotDispatcher {
+    pub async fn shutdown(self) {
+        match self.shutdown_token.shutdown() {
+            Ok(done) => done.await,
+            Err(_) => {
+                tracing::debug!("dispatcher was not running during shutdown");
+                self.dispatcher_task.abort();
+            }
+        }
+
+        if let Err(err) = self.dispatcher_task.await {
+            tracing::warn!(error = %err, "dispatcher task failed during shutdown");
+        }
+    }
+}
 
 fn to_user_id(id: i64) -> UserId {
     UserId(id.max(0) as u64)
 }
 
-/// Escape the five XML/HTML characters that Telegram's HTML parse mode
-/// interprets. Only used inside `<a href="...">{name}</a>` where `name` is
-/// user-controlled.
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

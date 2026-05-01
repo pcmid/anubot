@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use sea_orm::{DatabaseConnection, DbErr};
-use teloxide::types::{Message, MessageEntityKind};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntityKind};
+use url::Url;
 
+use crate::bot::text::*;
 use crate::bot::{Bot, HandlerError};
 use crate::db::session::SessionStatus;
 use crate::db::{group, session};
@@ -33,6 +35,9 @@ pub async fn filter_admin_command(msg: Message, bot: Arc<Bot>) -> Option<Command
 }
 
 pub async fn on_command(msg: Message, cmd: Command, bot: Arc<Bot>) -> Result<(), HandlerError> {
+    if matches!(cmd, Command::Settings) {
+        return on_settings_command(msg, bot).await;
+    }
     let reply = if matches!(cmd, Command::Enable) && !msg.chat.is_supergroup() {
         CommandReply::NotSupergroup
     } else {
@@ -47,6 +52,28 @@ pub async fn on_command(msg: Message, cmd: Command, bot: Arc<Bot>) -> Result<(),
     Ok(())
 }
 
+async fn on_settings_command(msg: Message, bot: Arc<Bot>) -> Result<(), HandlerError> {
+    let chat_id = msg.chat.id.0;
+    if group::get(bot.db(), chat_id).await?.is_none() {
+        bot.reply_to(msg.chat.id, msg.id, SETTINGS_GROUP_NOT_REGISTERED)
+            .await?;
+        return Ok(());
+    }
+    let link = format!(
+        "https://t.me/{}?start=settings_{}",
+        bot.bot_username(),
+        chat_id
+    );
+    let url = Url::parse(&link).expect("bot_username + chat_id should produce a valid URL");
+    let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+        SETTINGS_LINK_LABEL.to_string(),
+        url,
+    )]]);
+    bot.reply_with_keyboard(msg.chat.id, msg.id, SETTINGS_COMMAND_PROMPT, keyboard)
+        .await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Enable,
@@ -55,6 +82,7 @@ pub enum Command {
     SetWelcome(Option<String>),
     SetButton(Option<String>),
     Status,
+    Settings,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,6 +141,7 @@ pub async fn handle_command(
             group::set_button(db, chat_id, text.as_deref()).await?;
             Ok(CommandReply::Ok)
         }
+        Command::Settings => Ok(CommandReply::Ok),
         Command::Status => {
             let since = now_epoch() - STATUS_WINDOW_SECONDS;
             let verified_24h =
@@ -129,33 +158,36 @@ pub async fn handle_command(
     }
 }
 
-// -------- reply rendering ---------------------------------------------
-
-const REPLY_OK: &str = "操作成功。";
-const REPLY_INVALID_TIMEOUT: &str = "超时时长无效,允许范围 60-3600 秒。";
-
 fn render_status(
     enabled: bool,
     timeout_seconds: i64,
     verified_24h: i64,
     declined_24h: i64,
 ) -> String {
-    let state = if enabled { "已启用" } else { "已停用" };
-    format!(
-        "验证状态:{state}\n超时设置:{timeout_seconds} 秒\n\
-         过去 24 小时已验证:{verified_24h}\n过去 24 小时已拒绝:{declined_24h}",
+    let state = if enabled {
+        REPLY_STATUS_ENABLED
+    } else {
+        REPLY_STATUS_DISABLED
+    };
+    fill(
+        REPLY_STATUS_TEMPLATE,
+        &[
+            ("state", state),
+            ("timeout_seconds", &timeout_seconds.to_string()),
+            ("verified_24h", &verified_24h.to_string()),
+            ("declined_24h", &declined_24h.to_string()),
+        ],
     )
 }
 
 pub fn render_reply(reply: CommandReply, bot_username: &str) -> String {
     match reply {
         CommandReply::Ok => REPLY_OK.to_string(),
-        CommandReply::NotRegistered => {
-            format!("本群尚未启用验证,请先执行 /enable@{bot_username}。")
-        }
-        CommandReply::NotSupergroup => {
-            "本群是普通群组,无法对成员做限制,需要先升级为超级群组 (supergroup)。".to_string()
-        }
+        CommandReply::NotRegistered => fill(
+            REPLY_NOT_REGISTERED_TEMPLATE,
+            &[("bot_username", bot_username)],
+        ),
+        CommandReply::NotSupergroup => REPLY_NOT_SUPERGROUP.to_string(),
         CommandReply::InvalidTimeout => REPLY_INVALID_TIMEOUT.to_string(),
         CommandReply::Status {
             enabled,
@@ -174,6 +206,7 @@ pub fn parse_admin_command(cmd: &str, rest: &str) -> Option<Command> {
         ("/set_welcome", r) => Some(Command::SetWelcome(opt_string(r))),
         ("/set_button", r) => Some(Command::SetButton(opt_string(r))),
         ("/status", "") => Some(Command::Status),
+        ("/settings", "") => Some(Command::Settings),
         _ => None,
     }
 }

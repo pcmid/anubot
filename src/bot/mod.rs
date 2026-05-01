@@ -1,6 +1,9 @@
+mod ai;
 mod bot;
 mod commands;
-mod text;
+mod settings;
+mod spam;
+pub(crate) mod text;
 mod verify;
 
 pub use bot::Bot;
