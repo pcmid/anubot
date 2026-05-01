@@ -1,4 +1,4 @@
-use teloxide::payloads::{SendMessageSetters, UnbanChatMemberSetters};
+use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::*;
 use teloxide::types::{
     CallbackQueryId, ChatId, ChatPermissions, ForceReply, InlineKeyboardButton,
@@ -44,10 +44,6 @@ impl TelegramGateway {
     pub async fn kick_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
         self.inner
             .kick_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .await?;
-        self.inner
-            .unban_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .only_if_banned(true)
             .await
             .map(|_| ())
     }
@@ -55,12 +51,6 @@ impl TelegramGateway {
     pub async fn ban_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
         self.inner
             .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .revoke_messages(true)
-            .await?;
-
-        self.inner
-            .kick_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .revoke_messages(true)
             .await
             .map(|_| ())
     }

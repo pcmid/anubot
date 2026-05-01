@@ -40,6 +40,14 @@ pub async fn app_page(
         );
     }
 
+    tracing::info!(
+        chat_id,
+        user_id,
+        chat_title = %session.chat_title,
+        user_first_name = %session.user_first_name,
+        "user verification passed",
+    );
+
     if let Some(msg_id) = session.verify_msg_id {
         let _ = state.telegram.delete_message(chat_id, msg_id).await;
     }

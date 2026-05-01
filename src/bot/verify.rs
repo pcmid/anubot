@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rand::RngCore;
 use sea_orm::DbErr;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, User};
+use teloxide::types::{ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message};
 use url::Url;
 
 use crate::app::AppState;
@@ -15,39 +15,32 @@ use crate::util::time::now_epoch;
 const EXPIRY_POLL_SECONDS: u64 = 60;
 const EXPIRY_BATCH_LIMIT: u64 = 100;
 
-#[derive(Debug, Clone)]
-pub struct NewChatMembers {
-    pub chat_id: i64,
-    pub chat_title: String,
-    pub members: Vec<User>,
-}
-
-pub fn extract_new_chat_members(msg: Message) -> Option<NewChatMembers> {
-    let members = msg.new_chat_members()?.to_vec();
-    Some(NewChatMembers {
-        chat_id: msg.chat.id.0,
-        chat_title: msg.chat.title().unwrap_or("").to_string(),
-        members,
-    })
-}
-
-pub async fn on_new_chat_members(
-    update: NewChatMembers,
+pub async fn on_chat_member_joined(
+    update: ChatMemberUpdated,
     state: Arc<AppState>,
 ) -> Result<(), HandlerError> {
-    for user in update.members {
-        if user.id == state.identity.user_id {
-            continue;
-        }
-        verification(
-            &state,
-            update.chat_id,
-            user.id.0 as i64,
-            &update.chat_title,
-            &user.first_name,
-        )
-        .await?;
+    let user = update.new_chat_member.user.clone();
+    if user.id == state.identity.user_id {
+        return Ok(());
     }
+
+    let chat_id = update.chat.id.0;
+    let chat_title = update.chat.title().unwrap_or("").to_string();
+    tracing::info!(
+        chat_id,
+        chat_title = %chat_title,
+        user_id = user.id.0,
+        user_first_name = %user.first_name,
+        "user joined group",
+    );
+    verification(
+        &state,
+        chat_id,
+        user.id.0 as i64,
+        &chat_title,
+        &user.first_name,
+    )
+    .await?;
     Ok(())
 }
 
