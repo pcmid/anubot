@@ -3,7 +3,7 @@ use std::sync::Arc;
 use teloxide::dispatching::{Dispatcher, UpdateFilterExt};
 use teloxide::payloads::SetMyCommandsSetters;
 use teloxide::prelude::*;
-use teloxide::types::{BotCommand, BotCommandScope, Message, Update};
+use teloxide::types::{BotCommand, BotCommandScope, ChatMemberUpdated, Message, Update};
 use teloxide::{RequestError, dptree};
 
 use crate::app::AppState;
@@ -20,6 +20,10 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
 
     verify::spawn_expiry_worker(state.clone());
 
+    let command_messgaes = dptree::entry()
+        .filter_map_async(commands::filter_admin_command)
+        .endpoint(commands::on_command);
+
     let private_messages = dptree::entry()
         .filter(|m: Message| m.chat.is_private())
         .branch(
@@ -35,24 +39,22 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
 
     let group_messages = dptree::entry()
         .filter(|m: Message| !m.chat.is_private())
-        .branch(
-            dptree::entry()
-                .filter_map(verify::extract_new_chat_members)
-                .endpoint(verify::on_new_chat_members),
-        )
         .branch(dptree::entry().endpoint(spam::on_user_message));
+
+    let joined_chat_members = Update::filter_chat_member()
+        .filter(|m: ChatMemberUpdated| {
+            !m.old_chat_member.is_present() && m.new_chat_member.is_present()
+        })
+        .endpoint(verify::on_chat_member_joined);
 
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
-                .branch(
-                    dptree::entry()
-                        .filter_map_async(commands::filter_admin_command)
-                        .endpoint(commands::on_command),
-                )
+                .branch(command_messgaes)
                 .branch(private_messages)
                 .branch(group_messages),
         )
+        .branch(joined_chat_members)
         .branch(Update::filter_callback_query().endpoint(settings::on_settings_callback));
 
     let mut dispatcher = Dispatcher::builder(state.telegram.client(), handler)
