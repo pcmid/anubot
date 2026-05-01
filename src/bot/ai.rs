@@ -62,7 +62,16 @@ pub async fn check_spam(
     ]);
     let opts = ChatOptions::default().with_max_tokens(5);
 
+    tracing::debug!(provider, model, message, "AI spam check request");
     let resp = client.exec_chat(model, req, Some(&opts)).await?;
     let text = resp.first_text().unwrap_or("");
-    Ok(text.trim().to_lowercase().starts_with("yes"))
+    let is_spam = text.trim().to_lowercase().starts_with("yes");
+    tracing::debug!(
+        provider,
+        model,
+        response = text,
+        is_spam,
+        "AI spam check response"
+    );
+    Ok(is_spam)
 }

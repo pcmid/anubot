@@ -5,8 +5,9 @@ use teloxide::types::{
 };
 use url::Url;
 
+use crate::app::AppState;
 use crate::bot::text::*;
-use crate::bot::{Bot, HandlerError, ai};
+use crate::bot::{HandlerError, ai};
 use crate::db::group::{self, AiConfig, AiField};
 
 #[derive(Debug, Clone, Copy)]
@@ -18,22 +19,30 @@ pub struct SettingsTarget {
 pub async fn on_settings_main(
     msg: Message,
     chat_id: i64,
-    bot: Arc<Bot>,
+    state: Arc<AppState>,
 ) -> Result<(), HandlerError> {
     let Some(from) = msg.from.as_ref() else {
         return Ok(());
     };
-    if !is_chat_admin(&bot, chat_id, from.id).await {
-        bot.send_dm(from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
+    if !is_chat_admin(&state, chat_id, from.id).await {
+        state
+            .telegram
+            .send_dm(from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
             .await?;
         return Ok(());
     }
-    let (text, kb) = render_main_menu(&bot, chat_id).await?;
-    bot.send_dm(from.id.0 as i64, &text, Some(kb)).await?;
+    let (text, kb) = render_main_menu(&state, chat_id).await?;
+    state
+        .telegram
+        .send_dm(from.id.0 as i64, &text, Some(kb))
+        .await?;
     Ok(())
 }
 
-pub async fn on_settings_callback(query: CallbackQuery, bot: Arc<Bot>) -> Result<(), HandlerError> {
+pub async fn on_settings_callback(
+    query: CallbackQuery,
+    state: Arc<AppState>,
+) -> Result<(), HandlerError> {
     let Some(data) = query.data.as_deref() else {
         return Ok(());
     };
@@ -41,34 +50,43 @@ pub async fn on_settings_callback(query: CallbackQuery, bot: Arc<Bot>) -> Result
     if let Some(action) = parse_callback(data) {
         match action {
             CallbackAction::OpenField(target) => {
-                bot.answer_callback(query.id.clone()).await?;
-                if !is_chat_admin(&bot, target.chat_id, query.from.id).await {
-                    bot.send_dm(query.from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
+                state.telegram.answer_callback(query.id.clone()).await?;
+                if !is_chat_admin(&state, target.chat_id, query.from.id).await {
+                    state
+                        .telegram
+                        .send_dm(query.from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
                         .await?;
                     return Ok(());
                 }
-                handle_open_field(target, query.from.id.0 as i64, &bot).await?;
+                handle_open_field(target, query.from.id.0 as i64, &state).await?;
             }
             CallbackAction::SetProvider { chat_id, value } => {
                 let toast = format!("{}{}", SETTINGS_PROVIDER_SELECTED_PREFIX, value);
-                bot.answer_callback_with_text(query.id.clone(), &toast)
+                state
+                    .telegram
+                    .answer_callback_with_text(query.id.clone(), &toast)
                     .await?;
-                if !is_chat_admin(&bot, chat_id, query.from.id).await {
-                    bot.send_dm(query.from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
+                if !is_chat_admin(&state, chat_id, query.from.id).await {
+                    state
+                        .telegram
+                        .send_dm(query.from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
                         .await?;
                     return Ok(());
                 }
-                group::set_ai_config_field(bot.db(), chat_id, AiField::Provider, Some(&value))
+                group::set_ai_config_field(&state.db, chat_id, AiField::Provider, Some(&value))
                     .await?;
-                let (text, kb) = render_main_menu(&bot, chat_id).await?;
-                bot.send_dm(query.from.id.0 as i64, &text, Some(kb)).await?;
+                let (text, kb) = render_main_menu(&state, chat_id).await?;
+                state
+                    .telegram
+                    .send_dm(query.from.id.0 as i64, &text, Some(kb))
+                    .await?;
             }
             CallbackAction::Test { chat_id } => {
-                handle_test(query, chat_id, bot).await?;
+                handle_test(query, chat_id, state).await?;
             }
         }
     } else {
-        bot.answer_callback(query.id.clone()).await?;
+        state.telegram.answer_callback(query.id.clone()).await?;
     }
     Ok(())
 }
@@ -76,19 +94,26 @@ pub async fn on_settings_callback(query: CallbackQuery, bot: Arc<Bot>) -> Result
 async fn handle_test(
     query: CallbackQuery,
     chat_id: i64,
-    bot: Arc<Bot>,
+    state: Arc<AppState>,
 ) -> Result<(), HandlerError> {
-    bot.answer_callback_with_text(query.id.clone(), SETTINGS_TEST_PENDING)
+    state
+        .telegram
+        .answer_callback_with_text(query.id.clone(), SETTINGS_TEST_PENDING)
         .await?;
     let user_id = query.from.id.0 as i64;
-    if !is_chat_admin(&bot, chat_id, query.from.id).await {
-        bot.send_dm(user_id, SETTINGS_NOT_ADMIN, None).await?;
+    if !is_chat_admin(&state, chat_id, query.from.id).await {
+        state
+            .telegram
+            .send_dm(user_id, SETTINGS_NOT_ADMIN, None)
+            .await?;
         return Ok(());
     }
-    let g = group::get(bot.db(), chat_id).await?;
+    let g = group::get(&state.db, chat_id).await?;
     let cfg = AiConfig::parse(g.and_then(|g| g.ai_config).as_deref());
     let Some((provider, base, key, model)) = cfg.ready() else {
-        bot.send_dm(user_id, SETTINGS_TEST_MISSING_CONFIG, None)
+        state
+            .telegram
+            .send_dm(user_id, SETTINGS_TEST_MISSING_CONFIG, None)
             .await?;
         return Ok(());
     };
@@ -96,13 +121,13 @@ async fn handle_test(
     let base = base.to_string();
     let key = key.to_string();
     let model = model.to_string();
-    let bot2 = bot.clone();
+    let state2 = state.clone();
     tokio::spawn(async move {
         let text = match ai::check_spam(&provider, &base, &key, &model, "hello").await {
             Ok(_) => SETTINGS_TEST_OK.to_string(),
             Err(e) => format!("{SETTINGS_TEST_FAILED_PREFIX}{e}"),
         };
-        if let Err(e) = bot2.send_dm(user_id, &text, None).await {
+        if let Err(e) = state2.telegram.send_dm(user_id, &text, None).await {
             tracing::warn!(error = %e, user_id, "send test result DM failed");
         }
     });
@@ -112,12 +137,14 @@ async fn handle_test(
 async fn handle_open_field(
     target: SettingsTarget,
     user_id: i64,
-    bot: &Bot,
+    state: &AppState,
 ) -> Result<(), HandlerError> {
     match target.field {
         AiField::Provider => {
             let kb = render_provider_picker(target.chat_id);
-            bot.send_dm(user_id, SETTINGS_PROMPT_PICK_PROVIDER, Some(kb))
+            state
+                .telegram
+                .send_dm(user_id, SETTINGS_PROMPT_PICK_PROVIDER, Some(kb))
                 .await?;
         }
         AiField::ApiBase
@@ -140,7 +167,7 @@ async fn handle_open_field(
                 body,
                 settings_tag(target.chat_id, target.field.tag())
             );
-            bot.send_force_reply(user_id, &text).await?;
+            state.telegram.send_force_reply(user_id, &text).await?;
         }
     }
     Ok(())
@@ -149,51 +176,69 @@ async fn handle_open_field(
 pub async fn on_settings_reply(
     msg: Message,
     target: SettingsTarget,
-    bot: Arc<Bot>,
+    state: Arc<AppState>,
 ) -> Result<(), HandlerError> {
     let Some(from) = msg.from.as_ref() else {
         return Ok(());
     };
-    if !is_reply_to_this_bot(&msg, bot.bot_user_id()) {
+    if !is_reply_to_this_bot(&msg, state.identity.user_id) {
         return Ok(());
     }
-    if !is_chat_admin(&bot, target.chat_id, from.id).await {
-        bot.send_dm(from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
+    if !is_chat_admin(&state, target.chat_id, from.id).await {
+        state
+            .telegram
+            .send_dm(from.id.0 as i64, SETTINGS_NOT_ADMIN, None)
             .await?;
         return Ok(());
     }
 
     let value = msg.text().unwrap_or("").trim();
     if value.is_empty() {
-        bot.send_dm(from.id.0 as i64, SETTINGS_EMPTY_VALUE, None)
+        state
+            .telegram
+            .send_dm(from.id.0 as i64, SETTINGS_EMPTY_VALUE, None)
             .await?;
         return Ok(());
     }
     if matches!(target.field, AiField::ApiBase) && Url::parse(value).is_err() {
-        bot.send_dm(from.id.0 as i64, SETTINGS_INVALID_URL, None)
+        state
+            .telegram
+            .send_dm(from.id.0 as i64, SETTINGS_INVALID_URL, None)
             .await?;
         return Ok(());
     }
     if !validate_settings_value(target.field, value) {
-        bot.send_dm(from.id.0 as i64, SETTINGS_INVALID_NUMBER, None)
+        state
+            .telegram
+            .send_dm(from.id.0 as i64, SETTINGS_INVALID_NUMBER, None)
             .await?;
         return Ok(());
     }
 
-    group::set_ai_config_field(bot.db(), target.chat_id, target.field, Some(value)).await?;
+    group::set_ai_config_field(&state.db, target.chat_id, target.field, Some(value)).await?;
 
     let priv_chat_id = msg.chat.id.0;
-    if let Err(e) = bot.delete_message(priv_chat_id, msg.id.0 as i64).await {
+    if let Err(e) = state
+        .telegram
+        .delete_message(priv_chat_id, msg.id.0 as i64)
+        .await
+    {
         tracing::warn!(error = %e, "delete user reply message failed");
     }
     if let Some(prompt) = msg.reply_to_message()
-        && let Err(e) = bot.delete_message(priv_chat_id, prompt.id.0 as i64).await
+        && let Err(e) = state
+            .telegram
+            .delete_message(priv_chat_id, prompt.id.0 as i64)
+            .await
     {
         tracing::warn!(error = %e, "delete prompt message failed");
     }
 
-    let (text, kb) = render_main_menu(&bot, target.chat_id).await?;
-    bot.send_dm(from.id.0 as i64, &text, Some(kb)).await?;
+    let (text, kb) = render_main_menu(&state, target.chat_id).await?;
+    state
+        .telegram
+        .send_dm(from.id.0 as i64, &text, Some(kb))
+        .await?;
     Ok(())
 }
 
@@ -263,17 +308,19 @@ fn parse_callback(data: &str) -> Option<CallbackAction> {
     None
 }
 
-async fn is_chat_admin(bot: &Bot, chat_id: i64, user_id: UserId) -> bool {
-    bot.is_privileged(ChatId(chat_id), user_id)
+async fn is_chat_admin(state: &AppState, chat_id: i64, user_id: UserId) -> bool {
+    state
+        .telegram
+        .is_privileged(ChatId(chat_id), user_id)
         .await
         .unwrap_or(false)
 }
 
 async fn render_main_menu(
-    bot: &Bot,
+    state: &AppState,
     chat_id: i64,
 ) -> Result<(String, InlineKeyboardMarkup), HandlerError> {
-    let g = group::get(bot.db(), chat_id).await?;
+    let g = group::get(&state.db, chat_id).await?;
     let cfg = AiConfig::parse(g.and_then(|g| g.ai_config).as_deref());
     let limit = cfg.spam_check_message_limit().to_string();
     let window_hours = cfg.spam_check_window_hours().to_string();

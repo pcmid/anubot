@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 use sea_orm::{
     ActiveValue::Set,
-    PaginatorTrait,
+    PaginatorTrait, QueryOrder,
     sea_query::{Expr, OnConflict},
 };
 use sea_orm::{QuerySelect, SelectColumns};
@@ -29,6 +29,7 @@ pub struct Model {
     pub chat_title: String,
     pub user_first_name: String,
     pub verify_msg_id: Option<i64>,
+    pub verify_token: Option<String>,
     pub status: SessionStatus,
     pub expires_at: i64,
     pub created_at: i64,
@@ -49,6 +50,7 @@ pub struct NewSession<'a> {
     pub chat_title: &'a str,
     pub user_first_name: &'a str,
     pub verify_msg_id: Option<i64>,
+    pub verify_token: &'a str,
     pub expires_at: i64,
 }
 
@@ -59,6 +61,7 @@ pub async fn create(db: &DatabaseConnection, s: NewSession<'_>) -> Result<(), Db
         chat_title: Set(s.chat_title.to_owned()),
         user_first_name: Set(s.user_first_name.to_owned()),
         verify_msg_id: Set(s.verify_msg_id),
+        verify_token: Set(Some(s.verify_token.to_owned())),
         status: Set(SessionStatus::Pending),
         expires_at: Set(s.expires_at),
         created_at: Set(now_epoch()),
@@ -73,6 +76,7 @@ pub async fn create(db: &DatabaseConnection, s: NewSession<'_>) -> Result<(), Db
                     Column::ChatTitle,
                     Column::UserFirstName,
                     Column::VerifyMsgId,
+                    Column::VerifyToken,
                     Column::Status,
                     Column::ExpiresAt,
                     Column::CreatedAt,
@@ -87,15 +91,33 @@ pub async fn create(db: &DatabaseConnection, s: NewSession<'_>) -> Result<(), Db
     Ok(())
 }
 
+pub async fn set_verify_token(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    user_id: i64,
+    token: &str,
+) -> Result<bool, DbErr> {
+    let res = Entity::update_many()
+        .col_expr(Column::VerifyToken, token.to_owned().into())
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Pending))
+        .exec(db)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
 pub async fn find_active(
     db: &DatabaseConnection,
     chat_id: i64,
     user_id: i64,
 ) -> Result<Option<Model>, DbErr> {
+    let now = now_epoch();
     Entity::find()
         .filter(Column::ChatId.eq(chat_id))
         .filter(Column::UserId.eq(user_id))
         .filter(Column::Status.eq(SessionStatus::Pending))
+        .filter(Column::ExpiresAt.gt(now))
         .one(db)
         .await
 }
@@ -113,25 +135,28 @@ pub async fn find_verified(
         .await
 }
 
-pub async fn mark_expired_if_pending(
+pub async fn mark_expired_if_pending_due(
     db: &DatabaseConnection,
     chat_id: i64,
     user_id: i64,
+    now: i64,
 ) -> Result<bool, DbErr> {
     let res = Entity::update_many()
         .col_expr(Column::Status, Expr::value(SessionStatus::Expired))
         .filter(Column::ChatId.eq(chat_id))
         .filter(Column::UserId.eq(user_id))
         .filter(Column::Status.eq(SessionStatus::Pending))
+        .filter(Column::ExpiresAt.lte(now))
         .exec(db)
         .await?;
     Ok(res.rows_affected == 1)
 }
 
-pub async fn mark_verified(
+pub async fn mark_verified_if_pending_unexpired(
     db: &DatabaseConnection,
     chat_id: i64,
     user_id: i64,
+    token: &str,
     verified_at: i64,
 ) -> Result<bool, DbErr> {
     let res = Entity::update_many()
@@ -139,15 +164,24 @@ pub async fn mark_verified(
         .col_expr(Column::VerifiedAt, verified_at.into())
         .filter(Column::ChatId.eq(chat_id))
         .filter(Column::UserId.eq(user_id))
+        .filter(Column::VerifyToken.eq(token))
         .filter(Column::Status.eq(SessionStatus::Pending))
+        .filter(Column::ExpiresAt.gt(verified_at))
         .exec(db)
         .await?;
     Ok(res.rows_affected == 1)
 }
 
-pub async fn find_all_active(db: &DatabaseConnection) -> Result<Vec<Model>, DbErr> {
+pub async fn find_due_pending(
+    db: &DatabaseConnection,
+    now: i64,
+    limit: u64,
+) -> Result<Vec<Model>, DbErr> {
     Entity::find()
         .filter(Column::Status.eq(SessionStatus::Pending))
+        .filter(Column::ExpiresAt.lte(now))
+        .order_by_asc(Column::ExpiresAt)
+        .limit(limit)
         .all(db)
         .await
 }

@@ -1,12 +1,10 @@
 mod ai;
-mod bot;
 mod commands;
+pub(crate) mod routes;
 mod settings;
 mod spam;
 pub(crate) mod text;
 mod verify;
-
-pub use bot::Bot;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum HandlerError {

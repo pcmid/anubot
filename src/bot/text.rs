@@ -18,6 +18,7 @@ pub const CMD_SET_WELCOME: &str = "自定义欢迎语(清空则恢复默认)";
 pub const CMD_SET_BUTTON: &str = "自定义按钮文字(清空则恢复默认)";
 pub const CMD_STATUS: &str = "查看本群验证状态";
 pub const CMD_SETTINGS: &str = "在私聊中配置 AI 反垃圾检测";
+pub const CMD_BAN: &str = "封禁被回复消息的用户并删除该消息";
 
 pub const SETTINGS_LINK_LABEL: &str = "在私聊中配置";
 
@@ -77,6 +78,8 @@ pub const REPLY_NOT_REGISTERED_TEMPLATE: &str =
     "本群尚未启用验证,请先执行 /enable@{bot_username}。";
 pub const REPLY_NOT_SUPERGROUP: &str =
     "本群是普通群组,无法对成员做限制,需要先升级为超级群组 (supergroup)。";
+pub const REPLY_BAN_NEED_REPLY: &str = "请回复一条用户消息后使用 /ban。";
+pub const REPLY_BAN_NO_USER: &str = "无法识别被回复消息的发送者。";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
@@ -89,7 +92,7 @@ pub const SETTINGS_AI_CONFIG_TEMPLATE: &str = "AI 反垃圾配置(chat_id={chat}
      检查时间窗: {window_hours} 小时\n\
      踢出阈值: {kick_threshold} 条\n\n\
      点击下方按钮修改对应字段。\n\
-     四项全部填写后,新成员验证通过后的前 {limit} 条消息,且在前 {window_hours} 小时内,将自动经 AI 检查；累计 {kick_threshold} 条垃圾消息后踢出。";
+     四项全部填写后,新成员验证通过后的前 {limit} 条消息,或在前 {window_hours} 小时内,将自动经 AI 检查；累计 {kick_threshold} 条垃圾消息后踢出。";
 
 pub const PROVIDER_BUTTONS: &[(&str, &str)] = &[
     ("OpenAI", "openai"),

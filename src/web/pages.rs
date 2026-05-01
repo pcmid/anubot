@@ -3,26 +3,34 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 
 use crate::bot::text::*;
-use crate::db::session::{self, SessionStatus};
+use crate::db::session;
 use crate::util::time::now_epoch;
-use crate::web::AppState;
+use crate::web::WebState;
 
 pub async fn app_page(
-    State(bot): State<AppState>,
-    Path((chat_id, user_id)): Path<(i64, i64)>,
+    State(state): State<WebState>,
+    Path((chat_id, user_id, token)): Path<(i64, i64, String)>,
 ) -> Response {
     let now = now_epoch();
 
-    let session = match session::find_active(bot.db(), chat_id, user_id).await {
+    let session = match session::find_active(&state.db, chat_id, user_id).await {
         Ok(Some(s)) => s,
         Ok(None) => return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID),
         Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     };
-    if session.status != SessionStatus::Pending || session.expires_at <= now {
-        return page(StatusCode::GONE, WEB_VERIFY_EXPIRED);
+    if session.verify_token.as_deref() != Some(token.as_str()) {
+        return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID);
     }
 
-    if let Err(err) = bot.unrestrict_member(chat_id, user_id).await {
+    match session::mark_verified_if_pending_unexpired(&state.db, chat_id, user_id, &token, now)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return page(StatusCode::GONE, WEB_VERIFY_EXPIRED),
+        Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
+    };
+
+    if let Err(err) = state.telegram.unrestrict_member(chat_id, user_id).await {
         tracing::warn!(
             chat_id, user_id, error = %err, "unrestrict_member failed",
         );
@@ -32,16 +40,10 @@ pub async fn app_page(
         );
     }
 
-    match session::mark_verified(bot.db(), chat_id, user_id, now).await {
-        Ok(true) => {
-            if let Some(msg_id) = session.verify_msg_id {
-                let _ = bot.delete_message(chat_id, msg_id).await;
-            }
-            page(StatusCode::OK, WEB_VERIFY_OK)
-        }
-        Ok(false) => page(StatusCode::GONE, WEB_VERIFY_EXPIRED),
-        Err(_) => page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
+    if let Some(msg_id) = session.verify_msg_id {
+        let _ = state.telegram.delete_message(chat_id, msg_id).await;
     }
+    page(StatusCode::OK, WEB_VERIFY_OK)
 }
 
 fn page(status: StatusCode, msg: &str) -> Response {

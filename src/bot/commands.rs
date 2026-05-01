@@ -4,72 +4,115 @@ use sea_orm::{DatabaseConnection, DbErr};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntityKind};
 use url::Url;
 
+use crate::app::AppState;
+use crate::bot::HandlerError;
 use crate::bot::text::*;
-use crate::bot::{Bot, HandlerError};
 use crate::db::session::SessionStatus;
 use crate::db::{group, session};
 use crate::util::time::now_epoch;
 
-pub async fn filter_admin_command(msg: Message, bot: Arc<Bot>) -> Option<Command> {
+pub async fn filter_admin_command(msg: Message, state: Arc<AppState>) -> Option<Command> {
     let from = msg.from.as_ref()?;
-    if !bot
+    let entities = msg.parse_entities()?;
+    let first = entities.first()?;
+    if first.kind() != &MessageEntityKind::BotCommand {
+        return None;
+    }
+    let (cmd, at) = split_command(first.text());
+    if let Some(at) = at
+        && !at.eq_ignore_ascii_case(&state.identity.username)
+    {
+        return None;
+    }
+    let full = msg.text()?;
+    let rest = full[first.range().end..].trim();
+    let command = parse_admin_command(cmd, rest)?;
+    if !state
+        .telegram
         .is_privileged(msg.chat.id, from.id)
         .await
         .unwrap_or(false)
     {
         return None;
     }
-    let entities = msg.parse_entities()?;
-    let first = entities.first()?;
-    if first.kind() != &MessageEntityKind::BotCommand {
-        return None;
-    }
-    let cmd_text = first.text();
-    let (cmd, at) = cmd_text.split_once('@')?;
-    if !at.eq_ignore_ascii_case(bot.bot_username()) {
-        return None;
-    }
-    let full = msg.text()?;
-    let rest = full[first.range().end..].trim();
-    parse_admin_command(cmd, rest)
+    Some(command)
 }
 
-pub async fn on_command(msg: Message, cmd: Command, bot: Arc<Bot>) -> Result<(), HandlerError> {
+pub async fn on_command(
+    msg: Message,
+    cmd: Command,
+    state: Arc<AppState>,
+) -> Result<(), HandlerError> {
     if matches!(cmd, Command::Settings) {
-        return on_settings_command(msg, bot).await;
+        return on_settings_command(msg, state).await;
+    }
+    if matches!(cmd, Command::Ban) {
+        return on_ban_command(msg, state).await;
     }
     let reply = if matches!(cmd, Command::Enable) && !msg.chat.is_supergroup() {
         CommandReply::NotSupergroup
     } else {
-        handle_command(bot.db(), msg.chat.id.0, cmd).await?
+        handle_command(&state.db, msg.chat.id.0, cmd).await?
     };
-    bot.reply_to(
-        msg.chat.id,
-        msg.id,
-        &render_reply(reply, bot.bot_username()),
-    )
-    .await?;
+    state
+        .telegram
+        .reply_to(
+            msg.chat.id,
+            msg.id,
+            &render_reply(reply, &state.identity.username),
+        )
+        .await?;
     Ok(())
 }
 
-async fn on_settings_command(msg: Message, bot: Arc<Bot>) -> Result<(), HandlerError> {
+async fn on_ban_command(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
+    let Some(reply) = msg.reply_to_message() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_BAN_NEED_REPLY)
+            .await?;
+        return Ok(());
+    };
+    let Some(user) = reply.from.as_ref() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_BAN_NO_USER)
+            .await?;
+        return Ok(());
+    };
+
+    state
+        .telegram
+        .ban_member(msg.chat.id.0, user.id.0 as i64)
+        .await?;
+    state
+        .telegram
+        .delete_message(msg.chat.id.0, reply.id.0 as i64)
+        .await?;
+    Ok(())
+}
+
+async fn on_settings_command(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
     let chat_id = msg.chat.id.0;
-    if group::get(bot.db(), chat_id).await?.is_none() {
-        bot.reply_to(msg.chat.id, msg.id, SETTINGS_GROUP_NOT_REGISTERED)
+    if group::get(&state.db, chat_id).await?.is_none() {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, SETTINGS_GROUP_NOT_REGISTERED)
             .await?;
         return Ok(());
     }
     let link = format!(
         "https://t.me/{}?start=settings_{}",
-        bot.bot_username(),
-        chat_id
+        state.identity.username, chat_id
     );
     let url = Url::parse(&link).expect("bot_username + chat_id should produce a valid URL");
     let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
         SETTINGS_LINK_LABEL.to_string(),
         url,
     )]]);
-    bot.reply_with_keyboard(msg.chat.id, msg.id, SETTINGS_COMMAND_PROMPT, keyboard)
+    state
+        .telegram
+        .reply_with_keyboard(msg.chat.id, msg.id, SETTINGS_COMMAND_PROMPT, keyboard)
         .await?;
     Ok(())
 }
@@ -83,6 +126,7 @@ pub enum Command {
     SetButton(Option<String>),
     Status,
     Settings,
+    Ban,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -142,6 +186,7 @@ pub async fn handle_command(
             Ok(CommandReply::Ok)
         }
         Command::Settings => Ok(CommandReply::Ok),
+        Command::Ban => Ok(CommandReply::Ok),
         Command::Status => {
             let since = now_epoch() - STATUS_WINDOW_SECONDS;
             let verified_24h =
@@ -207,8 +252,15 @@ pub fn parse_admin_command(cmd: &str, rest: &str) -> Option<Command> {
         ("/set_button", r) => Some(Command::SetButton(opt_string(r))),
         ("/status", "") => Some(Command::Status),
         ("/settings", "") => Some(Command::Settings),
+        ("/ban", "") => Some(Command::Ban),
         _ => None,
     }
+}
+
+fn split_command(cmd: &str) -> (&str, Option<&str>) {
+    cmd.split_once('@')
+        .map(|(cmd, at)| (cmd, Some(at)))
+        .unwrap_or((cmd, None))
 }
 
 fn opt_string(s: &str) -> Option<String> {
