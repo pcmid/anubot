@@ -1,6 +1,8 @@
+mod app;
 mod bot;
 mod config;
 mod db;
+mod telegram;
 mod util;
 mod web;
 
@@ -20,16 +22,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config::from_env()?;
     let db = db::connect(&cfg.database_url).await?;
 
-    let bot = Arc::new(bot::Bot::new(db, &cfg).await?);
+    let state = Arc::new(app::AppState::new(db, &cfg).await?);
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen_addr).await?;
     tracing::info!(listen = %cfg.listen_addr, "web server listening");
 
-    {
-        let bot = bot.clone();
-        tokio::spawn(async move { bot.run().await });
-    }
+    bot::routes::run_dispatcher(state.clone()).await;
+    axum::serve(listener, web::router(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
-    axum::serve(listener, web::router(bot)).await?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install Ctrl+C handler");
+    };
+    let terminate = async {
+        signal(SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("SIGINT received, shutting down"),
+        _ = terminate => tracing::info!("SIGTERM received, shutting down"),
+    }
 }
