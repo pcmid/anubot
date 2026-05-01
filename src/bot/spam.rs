@@ -18,10 +18,10 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
         return Ok(());
     };
 
-    let Some(g) = group::get(&state.db, chat_id).await? else {
+    if group::get(&state.db, chat_id).await?.is_none() {
         return Ok(());
-    };
-    let cfg = group::AiConfig::parse(g.ai_config.as_deref());
+    }
+    let cfg = group::get_ai_config(&state.db, chat_id).await?;
     let within_message_limit = s.message_counts < cfg.spam_check_message_limit();
     let verified_at = s.verified_at.unwrap_or(s.created_at);
     let window_secs = cfg.spam_check_window_hours() * 60 * 60;

@@ -8,7 +8,45 @@ use url::Url;
 use crate::app::AppState;
 use crate::bot::text::*;
 use crate::bot::{HandlerError, ai};
-use crate::db::group::{self, AiConfig, AiField};
+use crate::db::group::{self, AiConfig};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiField {
+    Provider,
+    ApiBase,
+    ApiKey,
+    Model,
+    SpamMessageLimit,
+    SpamWindowHours,
+    SpamKickThreshold,
+}
+
+impl AiField {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "provider" => Some(Self::Provider),
+            "url" | "api_base" => Some(Self::ApiBase),
+            "key" | "api_key" => Some(Self::ApiKey),
+            "model" => Some(Self::Model),
+            "limit" | "spam_message_limit" => Some(Self::SpamMessageLimit),
+            "window" | "spam_window_hours" => Some(Self::SpamWindowHours),
+            "kick" | "spam_kick_threshold" => Some(Self::SpamKickThreshold),
+            _ => None,
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Provider => "provider",
+            Self::ApiBase => "url",
+            Self::ApiKey => "key",
+            Self::Model => "model",
+            Self::SpamMessageLimit => "limit",
+            Self::SpamWindowHours => "window",
+            Self::SpamKickThreshold => "kick",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsTarget {
@@ -73,8 +111,7 @@ pub async fn on_settings_callback(
                         .await?;
                     return Ok(());
                 }
-                group::set_ai_config_field(&state.db, chat_id, AiField::Provider, Some(&value))
-                    .await?;
+                update_ai_config(&state, chat_id, AiField::Provider, Some(&value)).await?;
                 let (text, kb) = render_main_menu(&state, chat_id).await?;
                 state
                     .telegram
@@ -108,8 +145,7 @@ async fn handle_test(
             .await?;
         return Ok(());
     }
-    let g = group::get(&state.db, chat_id).await?;
-    let cfg = AiConfig::parse(g.and_then(|g| g.ai_config).as_deref());
+    let cfg = group::get_ai_config(&state.db, chat_id).await?;
     let Some((provider, base, key, model)) = cfg.ready() else {
         state
             .telegram
@@ -215,7 +251,7 @@ pub async fn on_settings_reply(
         return Ok(());
     }
 
-    group::set_ai_config_field(&state.db, target.chat_id, target.field, Some(value)).await?;
+    update_ai_config(&state, target.chat_id, target.field, Some(value)).await?;
 
     let priv_chat_id = msg.chat.id.0;
     if let Err(e) = state
@@ -274,6 +310,30 @@ fn validate_settings_value(field: AiField, value: &str) -> bool {
     }
 }
 
+async fn update_ai_config(
+    state: &AppState,
+    chat_id: i64,
+    field: AiField,
+    value: Option<&str>,
+) -> Result<bool, HandlerError> {
+    let mut cfg = group::get_ai_config(&state.db, chat_id).await?;
+    apply_ai_config_field(&mut cfg, field, value);
+    Ok(group::set_ai_config(&state.db, chat_id, &cfg).await?)
+}
+
+fn apply_ai_config_field(cfg: &mut AiConfig, field: AiField, value: Option<&str>) {
+    let v = value.map(str::to_string);
+    match field {
+        AiField::Provider => cfg.provider = v,
+        AiField::ApiBase => cfg.api_base = v,
+        AiField::ApiKey => cfg.api_key = v,
+        AiField::Model => cfg.model = v,
+        AiField::SpamMessageLimit => cfg.spam_check_message_limit = v.and_then(|s| s.parse().ok()),
+        AiField::SpamWindowHours => cfg.spam_check_window_hours = v.and_then(|s| s.parse().ok()),
+        AiField::SpamKickThreshold => cfg.spam_kick_threshold = v.and_then(|s| s.parse().ok()),
+    }
+}
+
 #[derive(Debug, Clone)]
 enum CallbackAction {
     OpenField(SettingsTarget),
@@ -320,8 +380,7 @@ async fn render_main_menu(
     state: &AppState,
     chat_id: i64,
 ) -> Result<(String, InlineKeyboardMarkup), HandlerError> {
-    let g = group::get(&state.db, chat_id).await?;
-    let cfg = AiConfig::parse(g.and_then(|g| g.ai_config).as_deref());
+    let cfg = group::get_ai_config(&state.db, chat_id).await?;
     let limit = cfg.spam_check_message_limit().to_string();
     let window_hours = cfg.spam_check_window_hours().to_string();
     let kick_threshold = cfg.spam_kick_threshold().to_string();

@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::db::session;
+use super::schema::Sessions;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -11,8 +11,8 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
-                    .add_column(ColumnDef::new(session::Column::VerifyToken).text().null())
+                    .table(Sessions::Table)
+                    .add_column(ColumnDef::new(Sessions::VerifyToken).text().null())
                     .to_owned(),
             )
             .await?;
@@ -24,8 +24,8 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
-                    .drop_column(session::Column::VerifyToken)
+                    .table(Sessions::Table)
+                    .drop_column(Sessions::VerifyToken)
                     .to_owned(),
             )
             .await?;

@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::db::{group, session};
+use super::schema::{Groups, Sessions};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -11,9 +11,9 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
+                    .table(Sessions::Table)
                     .add_column(
-                        ColumnDef::new(session::Column::MessageCounts)
+                        ColumnDef::new(Sessions::MessageCounts)
                             .big_integer()
                             .not_null()
                             .default(0),
@@ -24,9 +24,9 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
+                    .table(Sessions::Table)
                     .add_column(
-                        ColumnDef::new(session::Column::SpamCounts)
+                        ColumnDef::new(Sessions::SpamCounts)
                             .big_integer()
                             .not_null()
                             .default(0),
@@ -37,8 +37,8 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(group::Entity)
-                    .add_column(ColumnDef::new(group::Column::AiConfig).text().null())
+                    .table(Groups::Table)
+                    .add_column(ColumnDef::new(Groups::AiConfig).text().null())
                     .to_owned(),
             )
             .await?;
@@ -50,24 +50,24 @@ impl MigrationTrait for Migration {
         manager
             .alter_table(
                 Table::alter()
-                    .table(group::Entity)
-                    .drop_column(group::Column::AiConfig)
+                    .table(Groups::Table)
+                    .drop_column(Groups::AiConfig)
                     .to_owned(),
             )
             .await?;
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
-                    .drop_column(session::Column::SpamCounts)
+                    .table(Sessions::Table)
+                    .drop_column(Sessions::SpamCounts)
                     .to_owned(),
             )
             .await?;
         manager
             .alter_table(
                 Table::alter()
-                    .table(session::Entity)
-                    .drop_column(session::Column::MessageCounts)
+                    .table(Sessions::Table)
+                    .drop_column(Sessions::MessageCounts)
                     .to_owned(),
             )
             .await?;
