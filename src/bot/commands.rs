@@ -5,8 +5,8 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, Messa
 use url::Url;
 
 use crate::app::AppState;
-use crate::bot::HandlerError;
 use crate::bot::text::*;
+use crate::bot::{HandlerError, ai};
 use crate::db::session::SessionStatus;
 use crate::db::{group, session};
 use crate::util::time::now_epoch;
@@ -48,6 +48,9 @@ pub async fn on_command(
     }
     if matches!(cmd, Command::Ban) {
         return on_ban_command(msg, state).await;
+    }
+    if matches!(cmd, Command::TestSpam) {
+        return on_test_spam_command(msg, state).await;
     }
     let reply = if matches!(cmd, Command::Enable) && !msg.chat.is_supergroup() {
         CommandReply::NotSupergroup
@@ -117,6 +120,55 @@ async fn on_settings_command(msg: Message, state: Arc<AppState>) -> Result<(), H
     Ok(())
 }
 
+async fn on_test_spam_command(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
+    let Some(reply) = msg.reply_to_message() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_TEST_SPAM_NEED_REPLY)
+            .await?;
+        return Ok(());
+    };
+    let Some(text) = message_text(reply) else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_TEST_SPAM_NO_TEXT)
+            .await?;
+        return Ok(());
+    };
+    let cfg = group::get_ai_config(&state.db, msg.chat.id.0).await?;
+    let Some((provider, base, key, model)) = cfg.ready() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_TEST_SPAM_MISSING_CONFIG)
+            .await?;
+        return Ok(());
+    };
+
+    match ai::check_spam_raw(provider, base, key, model, text).await {
+        Ok(resp) => {
+            state
+                .telegram
+                .reply_to(msg.chat.id, msg.id, resp.trim())
+                .await?;
+        }
+        Err(err) => {
+            let body = fill(
+                REPLY_TEST_SPAM_FAILED_TEMPLATE,
+                &[("error", &err.to_string())],
+            );
+            state.telegram.reply_to(msg.chat.id, msg.id, &body).await?;
+        }
+    }
+    Ok(())
+}
+
+fn message_text(msg: &Message) -> Option<&str> {
+    msg.text()
+        .or_else(|| msg.caption())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Enable,
@@ -127,6 +179,7 @@ pub enum Command {
     Status,
     Settings,
     Ban,
+    TestSpam,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -187,6 +240,7 @@ pub async fn handle_command(
         }
         Command::Settings => Ok(CommandReply::Ok),
         Command::Ban => Ok(CommandReply::Ok),
+        Command::TestSpam => Ok(CommandReply::Ok),
         Command::Status => {
             let since = now_epoch() - STATUS_WINDOW_SECONDS;
             let verified_24h =
@@ -253,6 +307,7 @@ pub fn parse_admin_command(cmd: &str, rest: &str) -> Option<Command> {
         ("/status", "") => Some(Command::Status),
         ("/settings", "") => Some(Command::Settings),
         ("/ban", "") => Some(Command::Ban),
+        ("/test_spam", "") => Some(Command::TestSpam),
         _ => None,
     }
 }

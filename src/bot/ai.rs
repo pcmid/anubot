@@ -38,6 +38,26 @@ pub async fn check_spam(
     model: &str,
     message: &str,
 ) -> Result<i64, AiError> {
+    let text = check_spam_raw(provider, api_base, api_key, model, message).await?;
+    let score = parse_spam_score(&text).ok_or(AiError::BadResponse("missing 0-100 score"))?;
+    tracing::debug!(
+        provider,
+        model,
+        message,
+        response = text,
+        score,
+        "AI spam check response"
+    );
+    Ok(score)
+}
+
+pub async fn check_spam_raw(
+    provider: &str,
+    api_base: &str,
+    api_key: &str,
+    model: &str,
+    message: &str,
+) -> Result<String, AiError> {
     let kind = parse_adapter_kind(provider).ok_or(AiError::BadConfig("unknown provider"))?;
 
     let api_base = api_base.to_string();
@@ -64,16 +84,7 @@ pub async fn check_spam(
     ]);
     let opts = ChatOptions::default().with_max_tokens(3);
     let resp = client.exec_chat(model, req, Some(&opts)).await?;
-    let text = resp.first_text().unwrap_or("");
-    let score = parse_spam_score(text).ok_or(AiError::BadResponse("missing 0-100 score"))?;
-    tracing::debug!(
-        provider,
-        model,
-        response = text,
-        score,
-        "AI spam check response"
-    );
-    Ok(score)
+    Ok(resp.first_text().unwrap_or("").to_string())
 }
 
 fn parse_spam_score(text: &str) -> Option<i64> {

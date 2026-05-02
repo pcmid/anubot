@@ -19,6 +19,7 @@ pub const CMD_SET_BUTTON: &str = "自定义按钮文字(清空则恢复默认)";
 pub const CMD_STATUS: &str = "查看本群验证状态";
 pub const CMD_SETTINGS: &str = "在私聊中配置 AI 反垃圾检测";
 pub const CMD_BAN: &str = "封禁被回复消息的用户并删除该消息";
+pub const CMD_TEST_SPAM: &str = "回复消息后测试 AI 反垃圾检测";
 
 pub const SETTINGS_LINK_LABEL: &str = "在私聊中配置";
 
@@ -85,6 +86,10 @@ pub const REPLY_NOT_SUPERGROUP: &str =
     "本群是普通群组,无法对成员做限制,需要先升级为超级群组 (supergroup)。";
 pub const REPLY_BAN_NEED_REPLY: &str = "请回复一条用户消息后使用 /ban。";
 pub const REPLY_BAN_NO_USER: &str = "无法识别被回复消息的发送者。";
+pub const REPLY_TEST_SPAM_NEED_REPLY: &str = "请回复一条消息后使用 /test_spam。";
+pub const REPLY_TEST_SPAM_NO_TEXT: &str = "被回复消息没有可检查的文本。";
+pub const REPLY_TEST_SPAM_MISSING_CONFIG: &str = "请先配置完整 AI 检查。";
+pub const REPLY_TEST_SPAM_FAILED_TEMPLATE: &str = "AI 检查失败:{error}";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
