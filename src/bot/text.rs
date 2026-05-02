@@ -19,6 +19,7 @@ pub const CMD_SET_BUTTON: &str = "自定义按钮文字(清空则恢复默认)";
 pub const CMD_STATUS: &str = "查看本群验证状态";
 pub const CMD_SETTINGS: &str = "在私聊中配置 AI 反垃圾检测";
 pub const CMD_BAN: &str = "封禁被回复消息的用户并删除该消息";
+pub const CMD_TEST_SPAM: &str = "回复消息后测试 AI 反垃圾检测";
 
 pub const SETTINGS_LINK_LABEL: &str = "在私聊中配置";
 
@@ -37,8 +38,11 @@ pub const SETTINGS_PROMPT_SPAM_MESSAGE_LIMIT: &str = "请回复要检查的新�
 
 pub const SETTINGS_PROMPT_SPAM_WINDOW_HOURS: &str = "请回复验证通过后的检查时间窗小时数。";
 
-pub const SETTINGS_PROMPT_SPAM_KICK_THRESHOLD: &str =
-    "请回复累计多少条消息被 AI 判定为垃圾后踢出。";
+pub const SETTINGS_PROMPT_SPAM_DELETE_SCORE: &str = "请回复删除消息的垃圾分数阈值(0-100)。";
+
+pub const SETTINGS_PROMPT_SPAM_KICK_SCORE: &str = "请回复直接踢出的垃圾分数阈值(0-100)。";
+
+pub const SETTINGS_PROMPT_SPAM_KICK_THRESHOLD: &str = "请回复累计多少条消息达到删除阈值后踢出。";
 
 pub const SETTINGS_INVALID_URL: &str = "看起来不是合法的 URL,请检查后重发。";
 
@@ -59,7 +63,9 @@ pub const BTN_SET_API_KEY: &str = "API Key";
 pub const BTN_SET_MODEL: &str = "Model";
 pub const BTN_SET_SPAM_MESSAGE_LIMIT: &str = "检查消息数";
 pub const BTN_SET_SPAM_WINDOW_HOURS: &str = "检查时间窗";
-pub const BTN_SET_SPAM_KICK_THRESHOLD: &str = "踢出阈值";
+pub const BTN_SET_SPAM_DELETE_SCORE: &str = "删除分数";
+pub const BTN_SET_SPAM_KICK_SCORE: &str = "踢出分数";
+pub const BTN_SET_SPAM_KICK_THRESHOLD: &str = "累计踢出";
 pub const BTN_TEST: &str = "测试连通";
 
 pub const SETTINGS_PROMPT_PICK_PROVIDER: &str = "请选择 AI provider:";
@@ -80,6 +86,10 @@ pub const REPLY_NOT_SUPERGROUP: &str =
     "本群是普通群组,无法对成员做限制,需要先升级为超级群组 (supergroup)。";
 pub const REPLY_BAN_NEED_REPLY: &str = "请回复一条用户消息后使用 /ban。";
 pub const REPLY_BAN_NO_USER: &str = "无法识别被回复消息的发送者。";
+pub const REPLY_TEST_SPAM_NEED_REPLY: &str = "请回复一条消息后使用 /test_spam。";
+pub const REPLY_TEST_SPAM_NO_TEXT: &str = "被回复消息没有可检查的文本。";
+pub const REPLY_TEST_SPAM_MISSING_CONFIG: &str = "请先配置完整 AI 检查。";
+pub const REPLY_TEST_SPAM_FAILED_TEMPLATE: &str = "AI 检查失败:{error}";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
@@ -90,9 +100,11 @@ pub const SETTINGS_AI_CONFIG_TEMPLATE: &str = "AI 反垃圾配置(chat_id={chat}
      Model:    {model}\n\
      检查消息数: {limit}\n\
      检查时间窗: {window_hours} 小时\n\
-     踢出阈值: {kick_threshold} 条\n\n\
+     删除分数: {delete_score}\n\
+     踢出分数: {kick_score}\n\
+     累计踢出: {kick_threshold} 条\n\n\
      点击下方按钮修改对应字段。\n\
-     四项全部填写后,新成员验证通过后的前 {limit} 条消息,或在前 {window_hours} 小时内,将自动经 AI 检查；累计 {kick_threshold} 条垃圾消息后踢出。";
+     四项全部填写后,新成员验证通过后的前 {limit} 条消息,或在前 {window_hours} 小时内,将自动经 AI 评分；达到 {delete_score} 分删除,达到 {kick_score} 分直接踢出；累计 {kick_threshold} 条达到删除分数后踢出。";
 
 pub const PROVIDER_BUTTONS: &[(&str, &str)] = &[
     ("OpenAI", "openai"),
@@ -113,7 +125,7 @@ pub fn settings_tag(chat_id: i64, field_tag: &str) -> String {
 pub const SPAM_SYSTEM_PROMPT: &str = "你是 Telegram 群组反垃圾消息助手。\
      判断以下用户消息是否是垃圾消息(典型特征:广告引流、推广联系方式、\
      博彩 / 色情链接、加好友诱导、空泛刷屏、机器人代发等)。\
-     只输出一个词:yes 表示是垃圾,no 表示不是。不要任何解释。";
+     只输出一个 0 到 100 的整数分数,分数越高越像垃圾消息。不要任何解释。";
 
 pub const WEB_VERIFY_TITLE: &str = "Anubot 验证";
 pub const WEB_VERIFY_LINK_INVALID: &str = "该验证链接无效,请返回群组重新申请。";

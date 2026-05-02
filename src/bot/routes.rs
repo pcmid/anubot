@@ -80,6 +80,7 @@ async fn register_commands(state: &AppState) -> Result<(), RequestError> {
         BotCommand::new("status", CMD_STATUS),
         BotCommand::new("settings", CMD_SETTINGS),
         BotCommand::new("ban", CMD_BAN),
+        BotCommand::new("test_spam", CMD_TEST_SPAM),
     ];
     state
         .telegram
