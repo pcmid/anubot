@@ -43,7 +43,10 @@ impl TelegramGateway {
 
     pub async fn kick_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
         self.inner
-            .kick_chat_member(ChatId(chat_id), to_user_id(user_id))
+            .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
+            .await?;
+        self.inner
+            .unban_chat_member(ChatId(chat_id), to_user_id(user_id))
             .await
             .map(|_| ())
     }
