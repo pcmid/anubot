@@ -47,6 +47,8 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
         })
         .endpoint(verify::on_chat_member_joined);
 
+    let join_requests = Update::filter_chat_join_request().endpoint(verify::on_chat_join_request);
+
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
@@ -55,6 +57,7 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
                 .branch(group_messages),
         )
         .branch(joined_chat_members)
+        .branch(join_requests)
         .branch(Update::filter_callback_query().endpoint(settings::on_settings_callback));
 
     let mut dispatcher = Dispatcher::builder(state.telegram.client(), handler)
