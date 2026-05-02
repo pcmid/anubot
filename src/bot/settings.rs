@@ -18,6 +18,8 @@ pub enum AiField {
     Model,
     SpamMessageLimit,
     SpamWindowHours,
+    SpamDeleteScore,
+    SpamKickScore,
     SpamKickThreshold,
 }
 
@@ -30,7 +32,9 @@ impl AiField {
             "model" => Some(Self::Model),
             "limit" | "spam_message_limit" => Some(Self::SpamMessageLimit),
             "window" | "spam_window_hours" => Some(Self::SpamWindowHours),
-            "kick" | "spam_kick_threshold" => Some(Self::SpamKickThreshold),
+            "delete_score" | "spam_delete_score" => Some(Self::SpamDeleteScore),
+            "kick_score" | "spam_kick_score" => Some(Self::SpamKickScore),
+            "kick" | "spam_kick_threshold" | "spam_kick_count" => Some(Self::SpamKickThreshold),
             _ => None,
         }
     }
@@ -43,6 +47,8 @@ impl AiField {
             Self::Model => "model",
             Self::SpamMessageLimit => "limit",
             Self::SpamWindowHours => "window",
+            Self::SpamDeleteScore => "delete_score",
+            Self::SpamKickScore => "kick_score",
             Self::SpamKickThreshold => "kick",
         }
     }
@@ -188,6 +194,8 @@ async fn handle_open_field(
         | AiField::Model
         | AiField::SpamMessageLimit
         | AiField::SpamWindowHours
+        | AiField::SpamDeleteScore
+        | AiField::SpamKickScore
         | AiField::SpamKickThreshold => {
             let body = match target.field {
                 AiField::ApiBase => SETTINGS_PROMPT_API_BASE,
@@ -195,6 +203,8 @@ async fn handle_open_field(
                 AiField::Model => SETTINGS_PROMPT_MODEL,
                 AiField::SpamMessageLimit => SETTINGS_PROMPT_SPAM_MESSAGE_LIMIT,
                 AiField::SpamWindowHours => SETTINGS_PROMPT_SPAM_WINDOW_HOURS,
+                AiField::SpamDeleteScore => SETTINGS_PROMPT_SPAM_DELETE_SCORE,
+                AiField::SpamKickScore => SETTINGS_PROMPT_SPAM_KICK_SCORE,
                 AiField::SpamKickThreshold => SETTINGS_PROMPT_SPAM_KICK_THRESHOLD,
                 AiField::Provider => unreachable!(),
             };
@@ -306,6 +316,9 @@ fn validate_settings_value(field: AiField, value: &str) -> bool {
         AiField::SpamMessageLimit | AiField::SpamWindowHours | AiField::SpamKickThreshold => {
             value.parse::<i64>().is_ok_and(|n| n > 0)
         }
+        AiField::SpamDeleteScore | AiField::SpamKickScore => {
+            value.parse::<i64>().is_ok_and(|n| (0..=100).contains(&n))
+        }
         AiField::Provider | AiField::ApiBase | AiField::ApiKey | AiField::Model => true,
     }
 }
@@ -330,6 +343,8 @@ fn apply_ai_config_field(cfg: &mut AiConfig, field: AiField, value: Option<&str>
         AiField::Model => cfg.model = v,
         AiField::SpamMessageLimit => cfg.spam_check_message_limit = v.and_then(|s| s.parse().ok()),
         AiField::SpamWindowHours => cfg.spam_check_window_hours = v.and_then(|s| s.parse().ok()),
+        AiField::SpamDeleteScore => cfg.spam_delete_score = v.and_then(|s| s.parse().ok()),
+        AiField::SpamKickScore => cfg.spam_kick_score = v.and_then(|s| s.parse().ok()),
         AiField::SpamKickThreshold => cfg.spam_kick_threshold = v.and_then(|s| s.parse().ok()),
     }
 }
@@ -383,6 +398,8 @@ async fn render_main_menu(
     let cfg = group::get_ai_config(&state.db, chat_id).await?;
     let limit = cfg.spam_check_message_limit().to_string();
     let window_hours = cfg.spam_check_window_hours().to_string();
+    let delete_score = cfg.spam_delete_score().to_string();
+    let kick_score = cfg.spam_kick_score().to_string();
     let kick_threshold = cfg.spam_kick_threshold().to_string();
     let text = fill(
         SETTINGS_AI_CONFIG_TEMPLATE,
@@ -394,6 +411,8 @@ async fn render_main_menu(
             ("model", &display_field(cfg.model.as_deref())),
             ("limit", &limit),
             ("window_hours", &window_hours),
+            ("delete_score", &delete_score),
+            ("kick_score", &kick_score),
             ("kick_threshold", &kick_threshold),
         ],
     );
@@ -426,6 +445,16 @@ async fn render_main_menu(
             InlineKeyboardButton::callback(
                 BTN_SET_SPAM_WINDOW_HOURS.to_string(),
                 format!("set:{}:window", chat_id),
+            ),
+        ],
+        vec![
+            InlineKeyboardButton::callback(
+                BTN_SET_SPAM_DELETE_SCORE.to_string(),
+                format!("set:{}:delete_score", chat_id),
+            ),
+            InlineKeyboardButton::callback(
+                BTN_SET_SPAM_KICK_SCORE.to_string(),
+                format!("set:{}:kick_score", chat_id),
             ),
             InlineKeyboardButton::callback(
                 BTN_SET_SPAM_KICK_THRESHOLD.to_string(),

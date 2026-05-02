@@ -40,18 +40,28 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
     let base = base.to_string();
     let key = key.to_string();
     let model = model.to_string();
+    let delete_score = cfg.spam_delete_score();
+    let kick_score = cfg.spam_kick_score();
     let kick_threshold = cfg.spam_kick_threshold();
 
     let Some(text) = extract_spam_check_text(&msg) else {
         return Ok(());
     };
 
-    let state2 = state.clone();
     let msg_id = msg.id.0 as i64;
     tokio::spawn(async move {
         match ai::check_spam(&provider, &base, &key, &model, &text).await {
-            Ok(true) => handle_spam(&state2, chat_id, user_id, msg_id, kick_threshold).await,
-            Ok(false) => {}
+            Ok(score) if score >= delete_score => {
+                tracing::debug!(chat_id, user_id, score, "spam message detected",);
+                delete_spam_message(&state, chat_id, msg_id).await;
+
+                if score >= kick_score
+                    || spam_count(&state, chat_id, user_id).await >= kick_threshold
+                {
+                    kick_spammer(&state, chat_id, user_id).await;
+                }
+            }
+            Ok(_) => {}
             Err(err) => tracing::warn!(
                 error = %err, chat_id, user_id,
                 "AI spam check failed; allowing message",
@@ -86,32 +96,32 @@ fn message_text(msg: &Message) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-async fn handle_spam(
-    state: &AppState,
-    chat_id: i64,
-    user_id: i64,
-    msg_id: i64,
-    kick_threshold: i64,
-) {
+async fn delete_spam_message(state: &AppState, chat_id: i64, msg_id: i64) {
     if let Err(err) = state.telegram.delete_message(chat_id, msg_id).await {
         tracing::warn!(error = %err, chat_id, msg_id, "delete spam message failed");
     }
+}
+
+async fn spam_count(state: &AppState, chat_id: i64, user_id: i64) -> i64 {
     match session::increment_spam_count_if_verified(&state.db, chat_id, user_id).await {
-        Ok(Some(new_count)) => {
-            tracing::info!(chat_id, user_id, new_count, "spam message detected");
-            if new_count >= kick_threshold
-                && let Err(err) = state.telegram.kick_member(chat_id, user_id).await
-            {
-                tracing::warn!(
-                    error = %err, chat_id, user_id,
-                    "kick spammer failed",
-                );
-            }
+        Ok(Some(new_count)) => new_count,
+        Ok(None) => 0,
+        Err(err) => {
+            tracing::warn!(
+                error = %err, chat_id, user_id,
+                "increment_spam_count failed",
+            );
+            0
         }
-        Ok(None) => {}
-        Err(err) => tracing::warn!(
+    }
+}
+
+async fn kick_spammer(state: &AppState, chat_id: i64, user_id: i64) {
+    tracing::debug!(chat_id, user_id, "kicking spammer",);
+    if let Err(err) = state.telegram.kick_member(chat_id, user_id).await {
+        tracing::warn!(
             error = %err, chat_id, user_id,
-            "increment_spam_count failed",
-        ),
+            "kick spammer failed",
+        );
     }
 }

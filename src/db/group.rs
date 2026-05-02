@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_TIMEOUT_SECONDS: i64 = 600;
 pub const DEFAULT_SPAM_CHECK_MESSAGE_LIMIT: i64 = 3;
 pub const DEFAULT_SPAM_CHECK_WINDOW_HOURS: i64 = 24;
+pub const DEFAULT_SPAM_DELETE_SCORE: i64 = 80;
+pub const DEFAULT_SPAM_KICK_SCORE: i64 = 90;
 pub const DEFAULT_SPAM_KICK_THRESHOLD: i64 = 2;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -15,6 +17,8 @@ pub struct AiConfig {
     pub model: Option<String>,
     pub spam_check_message_limit: Option<i64>,
     pub spam_check_window_hours: Option<i64>,
+    pub spam_delete_score: Option<i64>,
+    pub spam_kick_score: Option<i64>,
     pub spam_kick_threshold: Option<i64>,
 }
 
@@ -36,6 +40,14 @@ impl AiConfig {
     pub fn spam_check_window_hours(&self) -> i64 {
         self.spam_check_window_hours
             .unwrap_or(DEFAULT_SPAM_CHECK_WINDOW_HOURS)
+    }
+
+    pub fn spam_delete_score(&self) -> i64 {
+        self.spam_delete_score.unwrap_or(DEFAULT_SPAM_DELETE_SCORE)
+    }
+
+    pub fn spam_kick_score(&self) -> i64 {
+        self.spam_kick_score.unwrap_or(DEFAULT_SPAM_KICK_SCORE)
     }
 
     pub fn spam_kick_threshold(&self) -> i64 {

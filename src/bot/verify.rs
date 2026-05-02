@@ -69,9 +69,7 @@ pub async fn on_chat_join_request(
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
         tracing::warn!(
             chat_id,
-            chat_title = %chat_title,
             user_id,
-            user_first_name = %user.first_name,
             error = %err,
             "join request restrict failed; not approving",
         );
@@ -81,9 +79,7 @@ pub async fn on_chat_join_request(
     if let Err(err) = state.telegram.approve_join_request(chat_id, user_id).await {
         tracing::warn!(
             chat_id,
-            chat_title = %chat_title,
             user_id,
-            user_first_name = %user.first_name,
             error = %err,
             "join request approve failed",
         );
