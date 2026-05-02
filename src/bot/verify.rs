@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use rand::RngCore;
 use sea_orm::DbErr;
-use teloxide::types::{ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message};
+use teloxide::types::{
+    ChatJoinRequest, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+};
 use url::Url;
 
 use crate::app::AppState;
@@ -41,6 +43,60 @@ pub async fn on_chat_member_joined(
         &user.first_name,
     )
     .await?;
+    Ok(())
+}
+
+pub async fn on_chat_join_request(
+    request: ChatJoinRequest,
+    state: Arc<AppState>,
+) -> Result<(), HandlerError> {
+    let user = request.from.clone();
+    if user.id == state.identity.user_id {
+        return Ok(());
+    }
+
+    let chat_id = request.chat.id.0;
+    let user_id = user.id.0 as i64;
+    let chat_title = request.chat.title().unwrap_or("").to_string();
+
+    let Some(group) = group::get(&state.db, chat_id).await? else {
+        return Ok(());
+    };
+    if !group.enabled {
+        return Ok(());
+    }
+
+    if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
+        tracing::warn!(
+            chat_id,
+            chat_title = %chat_title,
+            user_id,
+            user_first_name = %user.first_name,
+            error = %err,
+            "join request restrict failed; not approving",
+        );
+        return Ok(());
+    }
+
+    if let Err(err) = state.telegram.approve_join_request(chat_id, user_id).await {
+        tracing::warn!(
+            chat_id,
+            chat_title = %chat_title,
+            user_id,
+            user_first_name = %user.first_name,
+            error = %err,
+            "join request approve failed",
+        );
+        return Ok(());
+    }
+    tracing::info!(
+        chat_id,
+        chat_title = %chat_title,
+        user_id,
+        user_first_name = %user.first_name,
+        "join request approved",
+    );
+
     Ok(())
 }
 

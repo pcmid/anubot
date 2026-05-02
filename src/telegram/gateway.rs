@@ -55,6 +55,17 @@ impl TelegramGateway {
             .map(|_| ())
     }
 
+    pub async fn approve_join_request(
+        &self,
+        chat_id: i64,
+        user_id: i64,
+    ) -> Result<(), RequestError> {
+        self.inner
+            .approve_chat_join_request(ChatId(chat_id), to_user_id(user_id))
+            .await
+            .map(|_| ())
+    }
+
     pub async fn send_group_verification_message(
         &self,
         chat_id: i64,
