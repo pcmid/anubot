@@ -33,6 +33,7 @@ async fn configure_sqlite(db: &DatabaseConnection) -> Result<(), DbErr> {
         db.execute_unprepared("PRAGMA foreign_keys = ON").await?;
         db.execute_unprepared("PRAGMA busy_timeout = 5000").await?;
         db.execute_unprepared("PRAGMA journal_mode = WAL").await?;
+        db.execute_unprepared("PRAGMA synchronous = NORMAL").await?;
     }
     Ok(())
 }
