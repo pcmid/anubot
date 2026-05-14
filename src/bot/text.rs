@@ -135,9 +135,61 @@ pub const WEB_VERIFY_UNRESTRICT_FAILED: &str = "解除禁言失败,请稍后再�
 pub const WEB_VERIFY_OK: &str = "验证通过,请返回群组。";
 
 pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (k, v) in pairs {
-        out = out.replace(&format!("{{{}}}", k), v);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('}') {
+            Some(end) => {
+                let key = &after[..end];
+                match pairs.iter().find(|(k, _)| *k == key) {
+                    Some((_, value)) => out.push_str(value),
+                    None => {
+                        out.push('{');
+                        out.push_str(key);
+                        out.push('}');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
     }
+    out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitutes_known_keys() {
+        assert_eq!(
+            fill(
+                "hi {name}, joining {chat}",
+                &[("name", "Alice"), ("chat", "Gentoo zh")]
+            ),
+            "hi Alice, joining Gentoo zh"
+        );
+    }
+
+    #[test]
+    fn preserves_unknown_keys() {
+        assert_eq!(fill("{a} and {b}", &[("a", "X")]), "X and {b}");
+    }
+
+    #[test]
+    fn does_not_recurse_into_substituted_values() {
+        assert_eq!(fill("{a}", &[("a", "{b}"), ("b", "X")]), "{b}");
+    }
+
+    #[test]
+    fn preserves_lone_open_brace() {
+        assert_eq!(fill("hello {", &[]), "hello {");
+    }
 }

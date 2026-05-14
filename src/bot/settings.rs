@@ -365,6 +365,9 @@ fn parse_callback(data: &str) -> Option<CallbackAction> {
         if field != "provider" {
             return None;
         }
+        if !PROVIDER_BUTTONS.iter().any(|(_, v)| *v == value) {
+            return None;
+        }
         return Some(CallbackAction::SetProvider {
             chat_id,
             value: value.to_string(),
@@ -537,6 +540,11 @@ mod tests {
     #[test]
     fn parse_callback_setval_non_provider_field_rejected() {
         assert!(parse_callback("setval:42:url:https://x").is_none());
+    }
+
+    #[test]
+    fn parse_callback_setval_unknown_provider_rejected() {
+        assert!(parse_callback("setval:42:provider:bogus_provider").is_none());
     }
 
     #[test]
