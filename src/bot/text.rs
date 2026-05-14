@@ -173,6 +173,7 @@ pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn substitutes_known_keys() {
@@ -198,5 +199,41 @@ mod tests {
     #[test]
     fn preserves_lone_open_brace() {
         assert_eq!(fill("hello {", &[]), "hello {");
+    }
+
+    proptest! {
+        #[test]
+        fn fill_never_panics(
+            template in ".{0,200}",
+            pairs in proptest::collection::vec(
+                ("[a-z_]{1,8}", ".{0,40}"),
+                0..5,
+            ),
+        ) {
+            let p: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let _ = fill(&template, &p);
+        }
+
+        #[test]
+        fn fill_template_without_placeholders_is_identity(
+            template in "[^{}]{0,200}",
+            pairs in proptest::collection::vec(
+                ("[a-z_]{1,8}", ".{0,40}"),
+                0..5,
+            ),
+        ) {
+            let p: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            prop_assert_eq!(fill(&template, &p), template);
+        }
+
+        #[test]
+        fn settings_tag_is_parseable_back(
+            chat_id in any::<i64>(),
+            field in prop::sample::select(&["provider", "url", "key", "model", "limit"]),
+        ) {
+            let tag = settings_tag(chat_id, field);
+            let needle = format!("[set:{}:{}]", chat_id, field);
+            prop_assert!(tag.contains(&needle));
+        }
     }
 }

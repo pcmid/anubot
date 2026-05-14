@@ -584,4 +584,34 @@ mod tests {
     fn display_key_unset_marker() {
         assert_eq!(display_key(None), SETTINGS_UNSET);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn parse_callback_never_panics(data in ".{0,200}") {
+            let _ = parse_callback(&data);
+        }
+
+        #[test]
+        fn parse_tag_never_panics(text in ".{0,300}") {
+            let _ = parse_tag(&text);
+        }
+
+        #[test]
+        fn parse_callback_setval_provider_roundtrip_proptest(
+            chat_id in any::<i64>(),
+            idx in 0usize..PROVIDER_BUTTONS.len(),
+        ) {
+            let value = PROVIDER_BUTTONS[idx].1;
+            let data = format!("setval:{chat_id}:provider:{value}");
+            match parse_callback(&data) {
+                Some(CallbackAction::SetProvider { chat_id: parsed, value: parsed_value }) => {
+                    prop_assert_eq!(parsed, chat_id);
+                    prop_assert_eq!(parsed_value, value);
+                }
+                other => prop_assert!(false, "expected SetProvider, got {:?}", other),
+            }
+        }
+    }
 }
