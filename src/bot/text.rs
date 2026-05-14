@@ -122,10 +122,26 @@ pub fn settings_tag(chat_id: i64, field_tag: &str) -> String {
     format!("\n\n[set:{chat_id}:{field_tag}]")
 }
 
-pub const SPAM_SYSTEM_PROMPT: &str = "你是 Telegram 群组反垃圾消息助手。\
-     判断以下用户消息是否是垃圾消息(典型特征:广告引流、推广联系方式、\
-     博彩 / 色情链接、加好友诱导、空泛刷屏、机器人代发等)。\
-     只输出一个 0 到 100 的整数分数,分数越高越像垃圾消息。不要任何解释。";
+pub fn spam_system_prompt(chat_title: &str) -> String {
+    let topic_line = if chat_title.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "本群主题:{chat_title}。技术连结、代码片段、命令输出、软件包名、pastebin / wiki 等都是技术群的正常内容,不应判为垃圾。\n"
+        )
+    };
+    format!(
+        "{topic_line}你是 Telegram 群组反垃圾消息助手。\
+         接下来你可能会看到两段内容,各以中括号标签开头。\
+         标签「【上下文…】」的那一段是被审核用户正在回复的上一条消息,\
+         仅用于理解对话场景,不要为它打分、也不要因为它含敏感词而抬高分数。\
+         标签「【被审核内容…】」的那一段才是要评分的目标。\
+         判断该被审核内容本身是否是垃圾消息(典型特征:广告引流、推广联系方式、\
+         博彩 / 色情链接、加好友诱导、空泛刷屏、机器人代发等)。\
+         消息可能是中英文混合或包含技术内容(链接、命令、代码),不要因为出现英文或技术内容就判为垃圾。\
+         只输出一个 0 到 100 的整数分数,分数越高越像垃圾消息。不要任何解释。",
+    )
+}
 
 pub const WEB_VERIFY_TITLE: &str = "Anubot 验证";
 pub const WEB_VERIFY_LINK_INVALID: &str = "该验证链接无效,请返回群组重新申请。";

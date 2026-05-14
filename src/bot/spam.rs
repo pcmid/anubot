@@ -40,6 +40,7 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
     let base = base.to_string();
     let key = key.to_string();
     let model = model.to_string();
+    let chat_title = s.chat_title.clone();
     let delete_score = cfg.spam_delete_score();
     let kick_score = cfg.spam_kick_score();
     let kick_threshold = cfg.spam_kick_threshold();
@@ -47,10 +48,21 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
     let Some(text) = extract_spam_check_text(&msg) else {
         return Ok(());
     };
+    let reply_context = extract_reply_context(&msg);
 
     let msg_id = msg.id.0 as i64;
     tokio::spawn(async move {
-        match ai::check_spam(&provider, &base, &key, &model, &text).await {
+        match ai::check_spam(
+            &provider,
+            &base,
+            &key,
+            &model,
+            &chat_title,
+            reply_context.as_deref(),
+            &text,
+        )
+        .await
+        {
             Ok(score) if score >= delete_score => {
                 tracing::debug!(chat_id, user_id, score, "spam message detected",);
                 delete_spam_message(&state, chat_id, msg_id).await;
@@ -73,20 +85,17 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
 }
 
 fn extract_spam_check_text(msg: &Message) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(reply) = msg.reply_to_message()
-        && let Some(text) = message_text(reply)
-    {
-        parts.push(text.to_string());
-    }
-    if let Some(text) = message_text(msg) {
-        parts.push(text.to_string());
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
+    // Only the user's own text/caption is what we score. The replied-to
+    // message is passed separately as labeled context — see
+    // extract_reply_context — so the AI can understand the conversation
+    // without grading the quoted original.
+    message_text(msg).map(str::to_string)
+}
+
+fn extract_reply_context(msg: &Message) -> Option<String> {
+    msg.reply_to_message()
+        .and_then(message_text)
+        .map(str::to_string)
 }
 
 fn message_text(msg: &Message) -> Option<&str> {
