@@ -144,7 +144,13 @@ async fn on_test_spam_command(msg: Message, state: Arc<AppState>) -> Result<(), 
         return Ok(());
     };
 
-    match ai::check_spam_raw(provider, base, key, model, text).await {
+    let chat_title = msg.chat.title().unwrap_or("");
+    let reply_context = reply
+        .reply_to_message()
+        .and_then(|grand| grand.text().or_else(|| grand.caption()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match ai::check_spam_raw(provider, base, key, model, chat_title, reply_context, text).await {
         Ok(resp) => {
             state
                 .telegram

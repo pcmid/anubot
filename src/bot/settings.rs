@@ -165,7 +165,7 @@ async fn handle_test(
     let model = model.to_string();
     let state2 = state.clone();
     tokio::spawn(async move {
-        let text = match ai::check_spam(&provider, &base, &key, &model, "hello").await {
+        let text = match ai::check_spam(&provider, &base, &key, &model, "", None, "hello").await {
             Ok(_) => SETTINGS_TEST_OK.to_string(),
             Err(e) => format!("{SETTINGS_TEST_FAILED_PREFIX}{e}"),
         };
