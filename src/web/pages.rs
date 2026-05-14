@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
+use subtle::ConstantTimeEq;
 
 use crate::bot::text::*;
 use crate::db::session;
@@ -15,10 +16,10 @@ pub async fn app_page(
 
     let session = match session::find_active(&state.db, chat_id, user_id).await {
         Ok(Some(s)) => s,
-        Ok(None) => return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID),
+        Ok(None) => return resolve_already_verified_or(&state, chat_id, user_id).await,
         Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     };
-    if session.verify_token.as_deref() != Some(token.as_str()) {
+    if !tokens_match(session.verify_token.as_deref(), &token) {
         return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID);
     }
 
@@ -26,7 +27,7 @@ pub async fn app_page(
         .await
     {
         Ok(true) => {}
-        Ok(false) => return page(StatusCode::GONE, WEB_VERIFY_EXPIRED),
+        Ok(false) => return resolve_already_verified_or(&state, chat_id, user_id).await,
         Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     };
 
@@ -54,8 +55,32 @@ pub async fn app_page(
     page(StatusCode::OK, WEB_VERIFY_OK)
 }
 
+fn tokens_match(stored: Option<&str>, presented: &str) -> bool {
+    let Some(stored) = stored else {
+        return false;
+    };
+    stored.as_bytes().ct_eq(presented.as_bytes()).into()
+}
+
+async fn resolve_already_verified_or(state: &WebState, chat_id: i64, user_id: i64) -> Response {
+    match session::find_verified(&state.db, chat_id, user_id).await {
+        Ok(Some(_)) => page(StatusCode::OK, WEB_VERIFY_OK),
+        Ok(None) => page(StatusCode::GONE, WEB_VERIFY_EXPIRED),
+        Err(_) => page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
+    }
+}
+
 fn page(status: StatusCode, msg: &str) -> Response {
-    (status, Html(render(msg))).into_response()
+    (status, security_headers(), Html(render(msg))).into_response()
+}
+
+fn security_headers() -> [(&'static str, &'static str); 4] {
+    [
+        ("Cache-Control", "no-store"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "no-referrer"),
+    ]
 }
 
 fn render(msg: &str) -> String {
