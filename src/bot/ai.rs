@@ -1,10 +1,14 @@
+use std::time::Duration;
+
 use genai::adapter::AdapterKind;
 use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use thiserror::Error;
 
-use crate::bot::text::SPAM_SYSTEM_PROMPT;
+use crate::bot::text::spam_system_prompt;
+
+const AI_CALL_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub fn parse_adapter_kind(s: &str) -> Option<AdapterKind> {
     match s {
@@ -29,6 +33,8 @@ pub enum AiError {
     BadResponse(&'static str),
     #[error("genai: {0}")]
     Genai(#[from] genai::Error),
+    #[error("timeout after {seconds}s")]
+    Timeout { seconds: u64 },
 }
 
 pub async fn check_spam(
@@ -36,15 +42,27 @@ pub async fn check_spam(
     api_base: &str,
     api_key: &str,
     model: &str,
+    chat_title: &str,
+    reply_context: Option<&str>,
     message: &str,
 ) -> Result<i64, AiError> {
-    let text = check_spam_raw(provider, api_base, api_key, model, message).await?;
+    let text = check_spam_raw(
+        provider,
+        api_base,
+        api_key,
+        model,
+        chat_title,
+        reply_context,
+        message,
+    )
+    .await?;
     let score = parse_spam_score(&text).ok_or(AiError::BadResponse("missing 0-100 score"))?;
     tracing::debug!(
         provider,
         model,
-        message,
-        response = text,
+        message_chars = message.chars().count(),
+        reply_chars = reply_context.map(|s| s.chars().count()).unwrap_or(0),
+        response_chars = text.chars().count(),
         score,
         "AI spam check response"
     );
@@ -56,6 +74,8 @@ pub async fn check_spam_raw(
     api_base: &str,
     api_key: &str,
     model: &str,
+    chat_title: &str,
+    reply_context: Option<&str>,
     message: &str,
 ) -> Result<String, AiError> {
     let kind = parse_adapter_kind(provider).ok_or(AiError::BadConfig("unknown provider"))?;
@@ -78,12 +98,31 @@ pub async fn check_spam_raw(
         .with_service_target_resolver(resolver)
         .build();
 
-    let req = ChatRequest::new(vec![
-        ChatMessage::system(SPAM_SYSTEM_PROMPT),
-        ChatMessage::user(message),
-    ]);
+    let system = spam_system_prompt(chat_title);
+    let mut messages = vec![ChatMessage::system(system)];
+    if let Some(ctx) = reply_context.filter(|s| !s.trim().is_empty()) {
+        messages.push(ChatMessage::user(format!(
+            "【上下文,仅供理解,请不要对这一段评分】被审核用户正在回复以下消息:\n{ctx}"
+        )));
+    }
+    messages.push(ChatMessage::user(format!(
+        "【被审核内容,请只对以下这一段评分】\n{message}"
+    )));
+    let req = ChatRequest::new(messages);
     let opts = ChatOptions::default().with_max_tokens(3);
-    let resp = client.exec_chat(model, req, Some(&opts)).await?;
+    let resp = match tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        client.exec_chat(model, req, Some(&opts)),
+    )
+    .await
+    {
+        Ok(r) => r?,
+        Err(_) => {
+            return Err(AiError::Timeout {
+                seconds: AI_CALL_TIMEOUT.as_secs(),
+            });
+        }
+    };
     Ok(resp.first_text().unwrap_or("").to_string())
 }
 

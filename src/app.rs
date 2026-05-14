@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use sea_orm::DatabaseConnection;
 use teloxide::prelude::Requester;
 use teloxide::types::UserId;
 use teloxide::{Bot as Teloxide, RequestError};
 
 use crate::config::Config;
+use crate::metrics::Metrics;
 use crate::telegram::TelegramGateway;
 
 pub struct AppState {
@@ -11,6 +14,7 @@ pub struct AppState {
     pub public_url: String,
     pub identity: BotIdentity,
     pub telegram: TelegramGateway,
+    pub metrics: Arc<Metrics>,
 }
 
 pub struct BotIdentity {
@@ -32,6 +36,7 @@ impl AppState {
             public_url: cfg.public_url.clone(),
             identity,
             telegram: TelegramGateway::new(tg),
+            metrics: Arc::new(Metrics::new()),
         })
     }
 }

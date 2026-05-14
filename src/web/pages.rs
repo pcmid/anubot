@@ -47,6 +47,10 @@ pub async fn app_page(
         user_first_name = %session.user_first_name,
         "user verification passed",
     );
+    state
+        .metrics
+        .verifications_succeeded
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     if let Some(msg_id) = session.verify_msg_id {
         let _ = state.telegram.delete_message(chat_id, msg_id).await;

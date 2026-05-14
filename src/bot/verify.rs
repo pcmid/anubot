@@ -16,6 +16,8 @@ use crate::util::time::now_epoch;
 
 const EXPIRY_POLL_SECONDS: u64 = 60;
 const EXPIRY_BATCH_LIMIT: u64 = 100;
+const VERIFIED_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const VERIFIED_CLEANUP_EVERY_TICKS: u64 = 60;
 
 pub async fn on_chat_member_joined(
     update: ChatMemberUpdated,
@@ -67,21 +69,21 @@ pub async fn on_chat_join_request(
     }
 
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request restrict failed; not approving",
+            "join request restrict failed after retries; bot likely lacks restrict-member permission — not approving",
         );
         return Ok(());
     }
 
     if let Err(err) = state.telegram.approve_join_request(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request approve failed",
+            "join request approve failed after retries; bot likely lacks invite-users permission",
         );
         return Ok(());
     }
@@ -118,9 +120,9 @@ async fn verification(
     }
 
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id, user_id, error = %err,
-            "restrict_member failed; skipping verification",
+            "restrict_member failed after retries; bot likely lacks restrict-member permission in this chat — skipping verification",
         );
         return Ok(());
     }
@@ -159,12 +161,26 @@ async fn verification(
         .await
     {
         Ok(m) => m,
-        Err(err) => {
+        Err(send_err) => {
             tracing::warn!(
-                chat_id, user_id, error = %err,
-                "send verification message failed; kicking user",
+                chat_id, user_id, error = %send_err,
+                "send verification message failed; trying to kick",
             );
-            let _ = state.telegram.kick_member(chat_id, user_id).await;
+            if let Err(kick_err) = state.telegram.kick_member(chat_id, user_id).await {
+                tracing::error!(
+                    chat_id, user_id,
+                    send_error = %send_err, kick_error = %kick_err,
+                    "send AND kick both failed; attempting unrestrict so the member is not stuck muted",
+                );
+                if let Err(unrestrict_err) =
+                    state.telegram.unrestrict_member(chat_id, user_id).await
+                {
+                    tracing::error!(
+                        chat_id, user_id, error = %unrestrict_err,
+                        "unrestrict also failed; member is muted with no session — manual intervention required",
+                    );
+                }
+            }
             return Ok(());
         }
     };
@@ -182,6 +198,10 @@ async fn verification(
         },
     )
     .await?;
+    state
+        .metrics
+        .verifications_started
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     Ok(())
 }
@@ -238,7 +258,12 @@ async fn on_verify_start(
                 Some(token) => token,
                 None => {
                     let token = generate_verify_token();
-                    session::set_verify_token(&state.db, chat_id, user_id, &token).await?;
+                    let persisted =
+                        session::set_verify_token(&state.db, chat_id, user_id, &token).await?;
+                    if !persisted {
+                        state.telegram.send_dm(user_id, DM_NO_PENDING, None).await?;
+                        return Ok(());
+                    }
                     token
                 }
             };
@@ -280,10 +305,24 @@ fn generate_verify_token() -> String {
 pub fn spawn_expiry_worker(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(EXPIRY_POLL_SECONDS));
+        let mut tick: u64 = 0;
         loop {
             interval.tick().await;
             if let Err(err) = expire_due_sessions(&state).await {
                 tracing::warn!(error = %err, "expiry worker failed");
+            }
+            tick = tick.wrapping_add(1);
+            if tick.is_multiple_of(VERIFIED_CLEANUP_EVERY_TICKS) {
+                let cutoff = now_epoch() - VERIFIED_RETENTION_SECONDS;
+                match session::delete_stale_verified(&state.db, cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(
+                        deleted = n,
+                        retention_days = VERIFIED_RETENTION_SECONDS / 86_400,
+                        "verified-session cleanup",
+                    ),
+                    Err(err) => tracing::warn!(error = %err, "verified-session cleanup failed"),
+                }
             }
         }
     });
@@ -299,20 +338,24 @@ async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
 
         let row_count = rows.len() as u64;
         for row in rows {
-            if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
-                tracing::warn!(
-                    chat_id = row.chat_id, user_id = row.user_id, error = %err,
-                    "expiry: kick_member failed",
-                );
-                continue;
-            }
-
             let expired =
                 session::mark_expired_if_pending_due(&state.db, row.chat_id, row.user_id, now)
                     .await?;
             if !expired {
                 continue;
             }
+            state
+                .metrics
+                .verifications_expired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
+                tracing::error!(
+                    chat_id = row.chat_id, user_id = row.user_id, error = %err,
+                    "expiry: kick_member failed after retries; bot likely lacks ban-users permission in this chat",
+                );
+            }
+
             if let Some(msg_id) = row.verify_msg_id
                 && let Err(err) = state.telegram.delete_message(row.chat_id, msg_id).await
             {
