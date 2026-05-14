@@ -41,6 +41,10 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
         .filter(|m: Message| !m.chat.is_private())
         .branch(dptree::entry().endpoint(spam::on_user_message));
 
+    let edited_group_messages = Update::filter_edited_message()
+        .filter(|m: Message| !m.chat.is_private())
+        .endpoint(spam::on_user_edited_message);
+
     let joined_chat_members = Update::filter_chat_member()
         .filter(|m: ChatMemberUpdated| {
             !m.old_chat_member.is_present() && m.new_chat_member.is_present()
@@ -56,6 +60,7 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
                 .branch(private_messages)
                 .branch(group_messages),
         )
+        .branch(edited_group_messages)
         .branch(joined_chat_members)
         .branch(join_requests)
         .branch(Update::filter_callback_query().endpoint(settings::on_settings_callback));
