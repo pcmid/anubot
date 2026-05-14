@@ -2,6 +2,7 @@ pub(crate) mod entity;
 pub(crate) mod group;
 pub(crate) mod repo;
 pub(crate) mod session;
+pub(crate) mod spam_decision;
 
 mod migration;
 use crate::db::migration::Migrator;

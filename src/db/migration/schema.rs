@@ -29,3 +29,15 @@ pub enum Sessions {
     MessageCounts,
     SpamCounts,
 }
+
+#[derive(DeriveIden)]
+pub enum SpamDecisions {
+    Table,
+    Id,
+    ChatId,
+    UserId,
+    MsgId,
+    Score,
+    Action,
+    CreatedAt,
+}
