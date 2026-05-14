@@ -198,6 +198,10 @@ async fn verification(
         },
     )
     .await?;
+    state
+        .metrics
+        .verifications_started
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     Ok(())
 }
@@ -340,6 +344,10 @@ async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
             if !expired {
                 continue;
             }
+            state
+                .metrics
+                .verifications_expired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
                 tracing::error!(

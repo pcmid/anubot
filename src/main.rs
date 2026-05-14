@@ -2,6 +2,7 @@ mod app;
 mod bot;
 mod config;
 mod db;
+mod metrics;
 mod telegram;
 mod util;
 mod web;

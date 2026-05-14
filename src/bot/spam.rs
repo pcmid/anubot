@@ -53,6 +53,7 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
 
     let msg_id = msg.id.0 as i64;
     tokio::spawn(async move {
+        use std::sync::atomic::Ordering::Relaxed;
         match ai::check_spam(
             &provider,
             &base,
@@ -65,9 +66,11 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
         .await
         {
             Ok(score) if score >= delete_score => {
+                state.metrics.ai_calls_ok.fetch_add(1, Relaxed);
                 tracing::debug!(chat_id, user_id, score, "spam message detected",);
                 delete_spam_message(&state, chat_id, msg_id).await;
                 record_decision(&state, chat_id, user_id, msg_id, score, SpamAction::Deleted).await;
+                state.metrics.spam_decisions_deleted.fetch_add(1, Relaxed);
 
                 if score >= kick_score
                     || spam_count(&state, chat_id, user_id).await >= kick_threshold
@@ -75,13 +78,19 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
                     kick_spammer(&state, chat_id, user_id).await;
                     record_decision(&state, chat_id, user_id, msg_id, score, SpamAction::Kicked)
                         .await;
+                    state.metrics.spam_decisions_kicked.fetch_add(1, Relaxed);
                 }
             }
-            Ok(_) => {}
-            Err(err) => tracing::warn!(
-                error = %err, chat_id, user_id,
-                "AI spam check failed; allowing message",
-            ),
+            Ok(_) => {
+                state.metrics.ai_calls_ok.fetch_add(1, Relaxed);
+            }
+            Err(err) => {
+                state.metrics.ai_calls_error.fetch_add(1, Relaxed);
+                tracing::warn!(
+                    error = %err, chat_id, user_id,
+                    "AI spam check failed; allowing message",
+                );
+            }
         }
     });
 
