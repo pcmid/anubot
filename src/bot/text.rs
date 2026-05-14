@@ -20,6 +20,7 @@ pub const CMD_STATUS: &str = "查看本群验证状态";
 pub const CMD_SETTINGS: &str = "在私聊中配置 AI 反垃圾检测";
 pub const CMD_BAN: &str = "封禁被回复消息的用户并删除该消息";
 pub const CMD_TEST_SPAM: &str = "回复消息后测试 AI 反垃圾检测";
+pub const CMD_UNSPAM: &str = "回复被误判的用户消息,减少其垃圾计数";
 
 pub const SETTINGS_LINK_LABEL: &str = "在私聊中配置";
 
@@ -92,6 +93,10 @@ pub const REPLY_TEST_SPAM_MISSING_CONFIG: &str = "请先配置完整 AI 检查�
 pub const REPLY_TEST_SPAM_FAILED_TEMPLATE: &str = "AI 检查失败:{error}";
 pub const REPLY_WELCOME_TOO_LONG_TEMPLATE: &str = "欢迎语过长,最长 {max} 个字符。";
 pub const REPLY_BUTTON_TOO_LONG_TEMPLATE: &str = "按钮文字过长,最长 {max} 个字符。";
+pub const REPLY_UNSPAM_NEED_REPLY: &str = "请回复一条该用户的消息后使用 /unspam。";
+pub const REPLY_UNSPAM_NO_USER: &str = "无法识别被回复消息的发送者。";
+pub const REPLY_UNSPAM_NOT_VERIFIED: &str = "该用户没有活跃验证记录,无需恢复。";
+pub const REPLY_UNSPAM_OK_TEMPLATE: &str = "已减少 1 次记录,当前累计:{count}。";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
