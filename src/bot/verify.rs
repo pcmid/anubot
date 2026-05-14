@@ -16,6 +16,8 @@ use crate::util::time::now_epoch;
 
 const EXPIRY_POLL_SECONDS: u64 = 60;
 const EXPIRY_BATCH_LIMIT: u64 = 100;
+const VERIFIED_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const VERIFIED_CLEANUP_EVERY_TICKS: u64 = 60;
 
 pub async fn on_chat_member_joined(
     update: ChatMemberUpdated,
@@ -280,10 +282,24 @@ fn generate_verify_token() -> String {
 pub fn spawn_expiry_worker(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(EXPIRY_POLL_SECONDS));
+        let mut tick: u64 = 0;
         loop {
             interval.tick().await;
             if let Err(err) = expire_due_sessions(&state).await {
                 tracing::warn!(error = %err, "expiry worker failed");
+            }
+            tick = tick.wrapping_add(1);
+            if tick.is_multiple_of(VERIFIED_CLEANUP_EVERY_TICKS) {
+                let cutoff = now_epoch() - VERIFIED_RETENTION_SECONDS;
+                match session::delete_stale_verified(&state.db, cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(
+                        deleted = n,
+                        retention_days = VERIFIED_RETENTION_SECONDS / 86_400,
+                        "verified-session cleanup",
+                    ),
+                    Err(err) => tracing::warn!(error = %err, "verified-session cleanup failed"),
+                }
             }
         }
     });

@@ -209,3 +209,15 @@ pub async fn count_by_status_since(
         .await?;
     Ok(count as i64)
 }
+
+pub async fn delete_stale_verified(
+    db: &DatabaseConnection,
+    verified_before: i64,
+) -> Result<u64, DbErr> {
+    let res = Entity::delete_many()
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .filter(Column::VerifiedAt.lt(verified_before))
+        .exec(db)
+        .await?;
+    Ok(res.rows_affected)
+}
