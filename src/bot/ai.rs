@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use genai::adapter::AdapterKind;
 use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
@@ -5,6 +7,8 @@ use genai::{Client, ModelIden, ServiceTarget};
 use thiserror::Error;
 
 use crate::bot::text::SPAM_SYSTEM_PROMPT;
+
+const AI_CALL_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub fn parse_adapter_kind(s: &str) -> Option<AdapterKind> {
     match s {
@@ -29,6 +33,8 @@ pub enum AiError {
     BadResponse(&'static str),
     #[error("genai: {0}")]
     Genai(#[from] genai::Error),
+    #[error("timeout after {seconds}s")]
+    Timeout { seconds: u64 },
 }
 
 pub async fn check_spam(
@@ -43,8 +49,8 @@ pub async fn check_spam(
     tracing::debug!(
         provider,
         model,
-        message,
-        response = text,
+        message_chars = message.chars().count(),
+        response_chars = text.chars().count(),
         score,
         "AI spam check response"
     );
@@ -83,7 +89,19 @@ pub async fn check_spam_raw(
         ChatMessage::user(message),
     ]);
     let opts = ChatOptions::default().with_max_tokens(3);
-    let resp = client.exec_chat(model, req, Some(&opts)).await?;
+    let resp = match tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        client.exec_chat(model, req, Some(&opts)),
+    )
+    .await
+    {
+        Ok(r) => r?,
+        Err(_) => {
+            return Err(AiError::Timeout {
+                seconds: AI_CALL_TIMEOUT.as_secs(),
+            });
+        }
+    };
     Ok(resp.first_text().unwrap_or("").to_string())
 }
 
