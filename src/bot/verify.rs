@@ -240,7 +240,12 @@ async fn on_verify_start(
                 Some(token) => token,
                 None => {
                     let token = generate_verify_token();
-                    session::set_verify_token(&state.db, chat_id, user_id, &token).await?;
+                    let persisted =
+                        session::set_verify_token(&state.db, chat_id, user_id, &token).await?;
+                    if !persisted {
+                        state.telegram.send_dm(user_id, DM_NO_PENDING, None).await?;
+                        return Ok(());
+                    }
                     token
                 }
             };
@@ -301,20 +306,20 @@ async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
 
         let row_count = rows.len() as u64;
         for row in rows {
-            if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
-                tracing::warn!(
-                    chat_id = row.chat_id, user_id = row.user_id, error = %err,
-                    "expiry: kick_member failed",
-                );
-                continue;
-            }
-
             let expired =
                 session::mark_expired_if_pending_due(&state.db, row.chat_id, row.user_id, now)
                     .await?;
             if !expired {
                 continue;
             }
+
+            if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
+                tracing::warn!(
+                    chat_id = row.chat_id, user_id = row.user_id, error = %err,
+                    "expiry: kick_member failed",
+                );
+            }
+
             if let Some(msg_id) = row.verify_msg_id
                 && let Err(err) = state.telegram.delete_message(row.chat_id, msg_id).await
             {
