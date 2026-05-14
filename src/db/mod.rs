@@ -68,4 +68,39 @@ mod tests {
                 .any(|name| name == "idx_sessions_status_expires")
         );
     }
+
+    #[tokio::test]
+    async fn migrations_reverse_cleanly() {
+        // Every up should have a working down so a maintainer can roll
+        // back without manually dropping tables. The migrator does not
+        // enforce this on its own.
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        migrate(&db).await.unwrap();
+
+        Migrator::down(&db, None).await.unwrap();
+
+        let backend = db.get_database_backend();
+        let rows = db
+            .query_all(Statement::from_string(
+                backend,
+                "SELECT name FROM sqlite_master \
+                 WHERE type = 'table' \
+                   AND name NOT LIKE 'sqlite_%' \
+                   AND name <> 'seaql_migrations'"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        let remaining: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.try_get("", "name").unwrap())
+            .collect();
+        assert!(
+            remaining.is_empty(),
+            "expected no application tables left after rollback, found: {remaining:?}",
+        );
+
+        // Re-up after full down must succeed (idempotent migration set).
+        migrate(&db).await.unwrap();
+    }
 }
