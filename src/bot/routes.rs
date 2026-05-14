@@ -5,6 +5,7 @@ use teloxide::payloads::SetMyCommandsSetters;
 use teloxide::prelude::*;
 use teloxide::types::{BotCommand, BotCommandScope, ChatMemberUpdated, Message, Update};
 use teloxide::{RequestError, dptree};
+use tokio::task::JoinHandle;
 
 use crate::app::AppState;
 use crate::bot::text::*;
@@ -18,7 +19,7 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
         );
     }
 
-    verify::spawn_expiry_worker(state.clone());
+    supervise("expiry_worker", verify::spawn_expiry_worker(state.clone()));
 
     let command_messgaes = dptree::entry()
         .filter_map_async(commands::filter_admin_command)
@@ -65,8 +66,31 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
         .default_handler(|_upd| async {})
         .build();
 
-    tokio::spawn(async move {
+    let dispatcher_handle = tokio::spawn(async move {
         dispatcher.dispatch().await;
+    });
+    supervise("dispatcher", dispatcher_handle);
+}
+
+fn supervise(name: &'static str, handle: JoinHandle<()>) {
+    tokio::spawn(async move {
+        match handle.await {
+            Ok(()) => tracing::error!(
+                task = name,
+                "background task exited unexpectedly; bot is degraded",
+            ),
+            Err(err) if err.is_panic() => {
+                tracing::error!(task = name, "background task panicked; bot is degraded",)
+            }
+            Err(err) if err.is_cancelled() => {
+                tracing::info!(task = name, "background task cancelled");
+            }
+            Err(err) => tracing::error!(
+                task = name,
+                error = %err,
+                "background task ended with join error; bot is degraded",
+            ),
+        }
     });
 }
 
