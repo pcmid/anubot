@@ -272,7 +272,7 @@ async fn on_verify_start(
 }
 
 fn generate_verify_token() -> String {
-    let mut bytes = [0_u8; 8];
+    let mut bytes = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

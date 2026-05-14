@@ -52,6 +52,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "serde_json",
+ "subtle",
  "teloxide",
  "thiserror",
  "tokio",
