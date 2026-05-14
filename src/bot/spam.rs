@@ -8,6 +8,27 @@ use crate::db::{group, session};
 use crate::util::time::now_epoch;
 
 pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
+    check_message(msg, state, MessageKind::New).await
+}
+
+pub async fn on_user_edited_message(
+    msg: Message,
+    state: Arc<AppState>,
+) -> Result<(), HandlerError> {
+    check_message(msg, state, MessageKind::Edited).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessageKind {
+    New,
+    Edited,
+}
+
+async fn check_message(
+    msg: Message,
+    state: Arc<AppState>,
+    kind: MessageKind,
+) -> Result<(), HandlerError> {
     let Some(from) = msg.from.as_ref() else {
         return Ok(());
     };
@@ -27,7 +48,9 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
     let window_secs = cfg.spam_check_window_hours() * 60 * 60;
     let within_time_window = now_epoch().saturating_sub(verified_at) <= window_secs;
 
-    session::increment_message_count_if_verified(&state.db, chat_id, user_id).await?;
+    if kind == MessageKind::New {
+        session::increment_message_count_if_verified(&state.db, chat_id, user_id).await?;
+    }
 
     if !within_message_limit && !within_time_window {
         return Ok(());
