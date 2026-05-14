@@ -12,6 +12,7 @@ use crate::app::AppState;
 use crate::bot::HandlerError;
 use crate::bot::text::*;
 use crate::db::{group, session};
+use crate::util::html;
 use crate::util::time::now_epoch;
 
 const EXPIRY_POLL_SECONDS: u64 = 60;
@@ -136,9 +137,13 @@ async fn verification(
         .clone()
         .unwrap_or_else(|| DEFAULT_BUTTON_LABEL.to_string());
     let timeout_minutes = (group.timeout_seconds / 60).to_string();
+    let escaped_chat_title = html::escape(chat_title);
     let text = fill(
         template,
-        &[("chat", chat_title), ("timeout", &timeout_minutes)],
+        &[
+            ("chat", escaped_chat_title.as_str()),
+            ("timeout", &timeout_minutes),
+        ],
     );
     let verify_url = Url::parse(&format!(
         "https://t.me/{}?start={}",

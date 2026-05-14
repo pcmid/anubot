@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::*;
 use teloxide::types::{
@@ -8,15 +13,31 @@ use teloxide::{Bot as Teloxide, RequestError};
 use url::Url;
 
 use crate::bot::text::{FORCE_REPLY_PLACEHOLDER, fill};
+use crate::util::html;
+
+const TG_MAX_ATTEMPTS: u32 = 3;
+const TG_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+
+const IS_PRIVILEGED_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct TelegramGateway {
     inner: Teloxide,
+    is_privileged_cache: Arc<Mutex<HashMap<(i64, u64), CacheEntry>>>,
+}
+
+#[derive(Clone, Copy)]
+struct CacheEntry {
+    value: bool,
+    inserted_at: Instant,
 }
 
 impl TelegramGateway {
     pub fn new(inner: Teloxide) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            is_privileged_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn client(&self) -> Teloxide {
@@ -24,38 +45,54 @@ impl TelegramGateway {
     }
 
     pub async fn restrict_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
-        self.inner
-            .restrict_chat_member(
-                ChatId(chat_id),
-                to_user_id(user_id),
-                ChatPermissions::empty(),
-            )
-            .await
-            .map(|_| ())
+        with_retries("restrict_member", || async {
+            self.inner
+                .restrict_chat_member(
+                    ChatId(chat_id),
+                    to_user_id(user_id),
+                    ChatPermissions::empty(),
+                )
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn unrestrict_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
-        self.inner
-            .restrict_chat_member(ChatId(chat_id), to_user_id(user_id), ChatPermissions::all())
-            .await
-            .map(|_| ())
+        with_retries("unrestrict_member", || async {
+            self.inner
+                .restrict_chat_member(ChatId(chat_id), to_user_id(user_id), ChatPermissions::all())
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn kick_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
-        self.inner
-            .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .await?;
-        self.inner
-            .unban_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .await
-            .map(|_| ())
+        with_retries("ban_chat_member", || async {
+            self.inner
+                .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
+                .await
+                .map(|_| ())
+        })
+        .await?;
+        with_retries("unban_chat_member", || async {
+            self.inner
+                .unban_chat_member(ChatId(chat_id), to_user_id(user_id))
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn ban_member(&self, chat_id: i64, user_id: i64) -> Result<(), RequestError> {
-        self.inner
-            .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
-            .await
-            .map(|_| ())
+        with_retries("ban_member", || async {
+            self.inner
+                .ban_chat_member(ChatId(chat_id), to_user_id(user_id))
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn approve_join_request(
@@ -63,10 +100,13 @@ impl TelegramGateway {
         chat_id: i64,
         user_id: i64,
     ) -> Result<(), RequestError> {
-        self.inner
-            .approve_chat_join_request(ChatId(chat_id), to_user_id(user_id))
-            .await
-            .map(|_| ())
+        with_retries("approve_join_request", || async {
+            self.inner
+                .approve_chat_join_request(ChatId(chat_id), to_user_id(user_id))
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn send_group_verification_message(
@@ -81,18 +121,21 @@ impl TelegramGateway {
         let mention = format!(
             r#"<a href="tg://user?id={id}">{name}</a>"#,
             id = user_id,
-            name = html_escape(user_first_name),
+            name = html::escape(user_first_name),
         );
         let text = fill(text_template, &[("user", &mention)]);
         let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
             button_label.to_string(),
             verify_url.clone(),
         )]]);
-        self.inner
-            .send_message(ChatId(chat_id), text)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard)
-            .await
+        with_retries("send_group_verification_message", || async {
+            self.inner
+                .send_message(ChatId(chat_id), text.clone())
+                .parse_mode(ParseMode::Html)
+                .reply_markup(keyboard.clone())
+                .await
+        })
+        .await
     }
 
     pub async fn send_dm(
@@ -101,18 +144,26 @@ impl TelegramGateway {
         text: &str,
         keyboard: Option<InlineKeyboardMarkup>,
     ) -> Result<Message, RequestError> {
-        let req = self.inner.send_message(to_user_id(user_id), text);
-        match keyboard {
-            Some(kb) => req.reply_markup(kb).await,
-            None => req.await,
-        }
+        with_retries("send_dm", || async {
+            let req = self
+                .inner
+                .send_message(to_user_id(user_id), text.to_string());
+            match keyboard.clone() {
+                Some(kb) => req.reply_markup(kb).await,
+                None => req.await,
+            }
+        })
+        .await
     }
 
     pub async fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<(), RequestError> {
-        self.inner
-            .delete_message(ChatId(chat_id), MessageId(message_id as i32))
-            .await
-            .map(|_| ())
+        with_retries("delete_message", || async {
+            self.inner
+                .delete_message(ChatId(chat_id), MessageId(message_id as i32))
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn is_privileged(
@@ -120,10 +171,39 @@ impl TelegramGateway {
         chat_id: ChatId,
         user_id: UserId,
     ) -> Result<bool, RequestError> {
-        self.inner
-            .get_chat_member(chat_id, user_id)
-            .await
-            .map(|m| m.is_privileged())
+        let key = (chat_id.0, user_id.0);
+        let now = Instant::now();
+
+        if let Some(value) = self.is_privileged_cached(key, now) {
+            return Ok(value);
+        }
+
+        let value = with_retries("get_chat_member", || async {
+            self.inner
+                .get_chat_member(chat_id, user_id)
+                .await
+                .map(|m| m.is_privileged())
+        })
+        .await?;
+
+        self.cache_is_privileged(key, value, now);
+        Ok(value)
+    }
+
+    fn is_privileged_cached(&self, key: (i64, u64), now: Instant) -> Option<bool> {
+        let cache = self.is_privileged_cache.lock().ok()?;
+        let entry = cache.get(&key)?;
+        if now.duration_since(entry.inserted_at) < IS_PRIVILEGED_TTL {
+            Some(entry.value)
+        } else {
+            None
+        }
+    }
+
+    fn cache_is_privileged(&self, key: (i64, u64), value: bool, inserted_at: Instant) {
+        if let Ok(mut cache) = self.is_privileged_cache.lock() {
+            cache.insert(key, CacheEntry { value, inserted_at });
+        }
     }
 
     pub async fn reply_to(
@@ -132,10 +212,13 @@ impl TelegramGateway {
         reply_to: MessageId,
         text: &str,
     ) -> Result<Message, RequestError> {
-        self.inner
-            .send_message(chat, text)
-            .reply_parameters(ReplyParameters::new(reply_to))
-            .await
+        with_retries("reply_to", || async {
+            self.inner
+                .send_message(chat, text.to_string())
+                .reply_parameters(ReplyParameters::new(reply_to))
+                .await
+        })
+        .await
     }
 
     pub async fn reply_with_keyboard(
@@ -145,11 +228,14 @@ impl TelegramGateway {
         text: &str,
         keyboard: InlineKeyboardMarkup,
     ) -> Result<Message, RequestError> {
-        self.inner
-            .send_message(chat, text)
-            .reply_parameters(ReplyParameters::new(reply_to))
-            .reply_markup(keyboard)
-            .await
+        with_retries("reply_with_keyboard", || async {
+            self.inner
+                .send_message(chat, text.to_string())
+                .reply_parameters(ReplyParameters::new(reply_to))
+                .reply_markup(keyboard.clone())
+                .await
+        })
+        .await
     }
 
     pub async fn send_force_reply(
@@ -157,16 +243,25 @@ impl TelegramGateway {
         user_id: i64,
         text: &str,
     ) -> Result<Message, RequestError> {
-        self.inner
-            .send_message(to_user_id(user_id), text)
-            .reply_markup(
-                ForceReply::new().input_field_placeholder(FORCE_REPLY_PLACEHOLDER.to_string()),
-            )
-            .await
+        with_retries("send_force_reply", || async {
+            self.inner
+                .send_message(to_user_id(user_id), text.to_string())
+                .reply_markup(
+                    ForceReply::new().input_field_placeholder(FORCE_REPLY_PLACEHOLDER.to_string()),
+                )
+                .await
+        })
+        .await
     }
 
     pub async fn answer_callback(&self, id: CallbackQueryId) -> Result<(), RequestError> {
-        self.inner.answer_callback_query(id).await.map(|_| ())
+        with_retries("answer_callback", || async {
+            self.inner
+                .answer_callback_query(id.clone())
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn answer_callback_with_text(
@@ -174,11 +269,14 @@ impl TelegramGateway {
         id: CallbackQueryId,
         text: &str,
     ) -> Result<(), RequestError> {
-        self.inner
-            .answer_callback_query(id)
-            .text(text)
-            .await
-            .map(|_| ())
+        with_retries("answer_callback_with_text", || async {
+            self.inner
+                .answer_callback_query(id.clone())
+                .text(text.to_string())
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 }
 
@@ -186,17 +284,36 @@ fn to_user_id(id: i64) -> UserId {
     UserId(id.max(0) as u64)
 }
 
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
+fn is_transient(err: &RequestError) -> bool {
+    matches!(
+        err,
+        RequestError::RetryAfter(_) | RequestError::Network(_) | RequestError::Io(_)
+    )
+}
+
+async fn with_retries<F, Fut, T>(op: &'static str, mut f: F) -> Result<T, RequestError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, RequestError>>,
+{
+    let mut delay = TG_INITIAL_BACKOFF;
+    let mut attempt: u32 = 1;
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(err) if is_transient(&err) && attempt < TG_MAX_ATTEMPTS => {
+                tracing::warn!(
+                    op,
+                    attempt,
+                    error = %err,
+                    wait_ms = delay.as_millis() as u64,
+                    "TG transient error; retrying",
+                );
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2);
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
         }
     }
-    out
 }
