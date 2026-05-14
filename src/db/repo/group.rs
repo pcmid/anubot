@@ -1,11 +1,14 @@
-use sea_orm::{ActiveValue::Set, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveValue::Set, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
+    TransactionTrait,
+};
 use sea_orm::{ColumnTrait, sea_query::OnConflict};
 
 use crate::db::entity::group::{ActiveModel, Column, Entity, Model};
 use crate::db::group::{AiConfig, DEFAULT_TIMEOUT_SECONDS};
 use crate::util::time::now_epoch;
 
-pub async fn get(db: &DatabaseConnection, chat_id: i64) -> Result<Option<Model>, DbErr> {
+pub async fn get<C: ConnectionTrait>(db: &C, chat_id: i64) -> Result<Option<Model>, DbErr> {
     Entity::find_by_id(chat_id).one(db).await
 }
 
@@ -88,7 +91,7 @@ pub async fn set_button(
     Ok(res.rows_affected == 1)
 }
 
-pub async fn get_ai_config(db: &DatabaseConnection, chat_id: i64) -> Result<AiConfig, DbErr> {
+pub async fn get_ai_config<C: ConnectionTrait>(db: &C, chat_id: i64) -> Result<AiConfig, DbErr> {
     Ok(get(db, chat_id)
         .await?
         .and_then(|g| g.ai_config)
@@ -96,8 +99,8 @@ pub async fn get_ai_config(db: &DatabaseConnection, chat_id: i64) -> Result<AiCo
         .unwrap_or_default())
 }
 
-pub async fn set_ai_config(
-    db: &DatabaseConnection,
+pub async fn set_ai_config<C: ConnectionTrait>(
+    db: &C,
     chat_id: i64,
     cfg: &AiConfig,
 ) -> Result<bool, DbErr> {
@@ -112,4 +115,20 @@ pub async fn set_ai_config(
         .exec(db)
         .await?;
     Ok(res.rows_affected == 1)
+}
+
+pub async fn update_ai_config<F>(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    apply: F,
+) -> Result<bool, DbErr>
+where
+    F: FnOnce(&mut AiConfig),
+{
+    let txn = db.begin().await?;
+    let mut cfg = get_ai_config(&txn, chat_id).await?;
+    apply(&mut cfg);
+    let ok = set_ai_config(&txn, chat_id, &cfg).await?;
+    txn.commit().await?;
+    Ok(ok)
 }
