@@ -329,9 +329,10 @@ async fn update_ai_config(
     field: AiField,
     value: Option<&str>,
 ) -> Result<bool, HandlerError> {
-    let mut cfg = group::get_ai_config(&state.db, chat_id).await?;
-    apply_ai_config_field(&mut cfg, field, value);
-    Ok(group::set_ai_config(&state.db, chat_id, &cfg).await?)
+    Ok(group::update_ai_config(&state.db, chat_id, |cfg| {
+        apply_ai_config_field(cfg, field, value);
+    })
+    .await?)
 }
 
 fn apply_ai_config_field(cfg: &mut AiConfig, field: AiField, value: Option<&str>) {
