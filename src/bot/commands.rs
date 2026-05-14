@@ -52,6 +52,9 @@ pub async fn on_command(
     if matches!(cmd, Command::TestSpam) {
         return on_test_spam_command(msg, state).await;
     }
+    if matches!(cmd, Command::Unspam) {
+        return on_unspam_command(msg, state).await;
+    }
     let reply = if matches!(cmd, Command::Enable) && !msg.chat.is_supergroup() {
         CommandReply::NotSupergroup
     } else {
@@ -92,6 +95,41 @@ async fn on_ban_command(msg: Message, state: Arc<AppState>) -> Result<(), Handle
         .telegram
         .delete_message(msg.chat.id.0, reply.id.0 as i64)
         .await?;
+    Ok(())
+}
+
+async fn on_unspam_command(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
+    let Some(reply) = msg.reply_to_message() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_UNSPAM_NEED_REPLY)
+            .await?;
+        return Ok(());
+    };
+    let Some(target) = reply.from.as_ref() else {
+        state
+            .telegram
+            .reply_to(msg.chat.id, msg.id, REPLY_UNSPAM_NO_USER)
+            .await?;
+        return Ok(());
+    };
+    let target_id = target.id.0 as i64;
+    let chat_id = msg.chat.id.0;
+    match session::decrement_spam_count_if_verified(&state.db, chat_id, target_id).await? {
+        Some(new_count) => {
+            let body = fill(
+                REPLY_UNSPAM_OK_TEMPLATE,
+                &[("count", &new_count.to_string())],
+            );
+            state.telegram.reply_to(msg.chat.id, msg.id, &body).await?;
+        }
+        None => {
+            state
+                .telegram
+                .reply_to(msg.chat.id, msg.id, REPLY_UNSPAM_NOT_VERIFIED)
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -180,6 +218,7 @@ pub enum Command {
     Settings,
     Ban,
     TestSpam,
+    Unspam,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -255,6 +294,7 @@ pub async fn handle_command(
         Command::Settings => Ok(CommandReply::Ok),
         Command::Ban => Ok(CommandReply::Ok),
         Command::TestSpam => Ok(CommandReply::Ok),
+        Command::Unspam => Ok(CommandReply::Ok),
         Command::Status => {
             let since = now_epoch() - STATUS_WINDOW_SECONDS;
             let verified_24h =
@@ -330,6 +370,7 @@ pub fn parse_admin_command(cmd: &str, rest: &str) -> Option<Command> {
         ("/settings", "") => Some(Command::Settings),
         ("/ban", "") => Some(Command::Ban),
         ("/test_spam", "") => Some(Command::TestSpam),
+        ("/unspam", "") => Some(Command::Unspam),
         _ => None,
     }
 }
