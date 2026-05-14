@@ -4,7 +4,8 @@ use teloxide::prelude::Message;
 
 use crate::app::AppState;
 use crate::bot::{HandlerError, ai};
-use crate::db::{group, session};
+use crate::db::spam_decision::SpamAction;
+use crate::db::{group, session, spam_decision};
 use crate::util::time::now_epoch;
 
 pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), HandlerError> {
@@ -54,11 +55,14 @@ pub async fn on_user_message(msg: Message, state: Arc<AppState>) -> Result<(), H
             Ok(score) if score >= delete_score => {
                 tracing::debug!(chat_id, user_id, score, "spam message detected",);
                 delete_spam_message(&state, chat_id, msg_id).await;
+                record_decision(&state, chat_id, user_id, msg_id, score, SpamAction::Deleted).await;
 
                 if score >= kick_score
                     || spam_count(&state, chat_id, user_id).await >= kick_threshold
                 {
                     kick_spammer(&state, chat_id, user_id).await;
+                    record_decision(&state, chat_id, user_id, msg_id, score, SpamAction::Kicked)
+                        .await;
                 }
             }
             Ok(_) => {}
@@ -122,6 +126,24 @@ async fn kick_spammer(state: &AppState, chat_id: i64, user_id: i64) {
         tracing::warn!(
             error = %err, chat_id, user_id,
             "kick spammer failed",
+        );
+    }
+}
+
+async fn record_decision(
+    state: &AppState,
+    chat_id: i64,
+    user_id: i64,
+    msg_id: i64,
+    score: i64,
+    action: SpamAction,
+) {
+    if let Err(err) =
+        spam_decision::record(&state.db, chat_id, user_id, msg_id, score, action).await
+    {
+        tracing::warn!(
+            error = %err, chat_id, user_id, msg_id, ?action,
+            "spam_decisions insert failed",
         );
     }
 }
