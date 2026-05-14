@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
+use subtle::ConstantTimeEq;
 
 use crate::bot::text::*;
 use crate::db::session;
@@ -18,7 +19,7 @@ pub async fn app_page(
         Ok(None) => return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID),
         Err(_) => return page(StatusCode::INTERNAL_SERVER_ERROR, WEB_VERIFY_SERVICE_ERROR),
     };
-    if session.verify_token.as_deref() != Some(token.as_str()) {
+    if !tokens_match(session.verify_token.as_deref(), &token) {
         return page(StatusCode::NOT_FOUND, WEB_VERIFY_LINK_INVALID);
     }
 
@@ -52,6 +53,13 @@ pub async fn app_page(
         let _ = state.telegram.delete_message(chat_id, msg_id).await;
     }
     page(StatusCode::OK, WEB_VERIFY_OK)
+}
+
+fn tokens_match(stored: Option<&str>, presented: &str) -> bool {
+    let Some(stored) = stored else {
+        return false;
+    };
+    stored.as_bytes().ct_eq(presented.as_bytes()).into()
 }
 
 fn page(status: StatusCode, msg: &str) -> Response {

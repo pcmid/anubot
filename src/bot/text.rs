@@ -20,6 +20,7 @@ pub const CMD_STATUS: &str = "查看本群验证状态";
 pub const CMD_SETTINGS: &str = "在私聊中配置 AI 反垃圾检测";
 pub const CMD_BAN: &str = "封禁被回复消息的用户并删除该消息";
 pub const CMD_TEST_SPAM: &str = "回复消息后测试 AI 反垃圾检测";
+pub const CMD_UNSPAM: &str = "回复被误判的用户消息,减少其垃圾计数";
 
 pub const SETTINGS_LINK_LABEL: &str = "在私聊中配置";
 
@@ -90,6 +91,12 @@ pub const REPLY_TEST_SPAM_NEED_REPLY: &str = "请回复一条消息后使用 /te
 pub const REPLY_TEST_SPAM_NO_TEXT: &str = "被回复消息没有可检查的文本。";
 pub const REPLY_TEST_SPAM_MISSING_CONFIG: &str = "请先配置完整 AI 检查。";
 pub const REPLY_TEST_SPAM_FAILED_TEMPLATE: &str = "AI 检查失败:{error}";
+pub const REPLY_WELCOME_TOO_LONG_TEMPLATE: &str = "欢迎语过长,最长 {max} 个字符。";
+pub const REPLY_BUTTON_TOO_LONG_TEMPLATE: &str = "按钮文字过长,最长 {max} 个字符。";
+pub const REPLY_UNSPAM_NEED_REPLY: &str = "请回复一条该用户的消息后使用 /unspam。";
+pub const REPLY_UNSPAM_NO_USER: &str = "无法识别被回复消息的发送者。";
+pub const REPLY_UNSPAM_NOT_VERIFIED: &str = "该用户没有活跃验证记录,无需恢复。";
+pub const REPLY_UNSPAM_OK_TEMPLATE: &str = "已减少 1 次记录,当前累计:{count}。";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
@@ -135,9 +142,98 @@ pub const WEB_VERIFY_UNRESTRICT_FAILED: &str = "解除禁言失败,请稍后再�
 pub const WEB_VERIFY_OK: &str = "验证通过,请返回群组。";
 
 pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (k, v) in pairs {
-        out = out.replace(&format!("{{{}}}", k), v);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('}') {
+            Some(end) => {
+                let key = &after[..end];
+                match pairs.iter().find(|(k, _)| *k == key) {
+                    Some((_, value)) => out.push_str(value),
+                    None => {
+                        out.push('{');
+                        out.push_str(key);
+                        out.push('}');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
     }
+    out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn substitutes_known_keys() {
+        assert_eq!(
+            fill(
+                "hi {name}, joining {chat}",
+                &[("name", "Alice"), ("chat", "Gentoo zh")]
+            ),
+            "hi Alice, joining Gentoo zh"
+        );
+    }
+
+    #[test]
+    fn preserves_unknown_keys() {
+        assert_eq!(fill("{a} and {b}", &[("a", "X")]), "X and {b}");
+    }
+
+    #[test]
+    fn does_not_recurse_into_substituted_values() {
+        assert_eq!(fill("{a}", &[("a", "{b}"), ("b", "X")]), "{b}");
+    }
+
+    #[test]
+    fn preserves_lone_open_brace() {
+        assert_eq!(fill("hello {", &[]), "hello {");
+    }
+
+    proptest! {
+        #[test]
+        fn fill_never_panics(
+            template in ".{0,200}",
+            pairs in proptest::collection::vec(
+                ("[a-z_]{1,8}", ".{0,40}"),
+                0..5,
+            ),
+        ) {
+            let p: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let _ = fill(&template, &p);
+        }
+
+        #[test]
+        fn fill_template_without_placeholders_is_identity(
+            template in "[^{}]{0,200}",
+            pairs in proptest::collection::vec(
+                ("[a-z_]{1,8}", ".{0,40}"),
+                0..5,
+            ),
+        ) {
+            let p: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            prop_assert_eq!(fill(&template, &p), template);
+        }
+
+        #[test]
+        fn settings_tag_is_parseable_back(
+            chat_id in any::<i64>(),
+            field in prop::sample::select(&["provider", "url", "key", "model", "limit"]),
+        ) {
+            let tag = settings_tag(chat_id, field);
+            let needle = format!("[set:{}:{}]", chat_id, field);
+            prop_assert!(tag.contains(&needle));
+        }
+    }
 }

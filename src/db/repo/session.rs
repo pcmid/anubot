@@ -195,6 +195,35 @@ pub async fn increment_spam_count_if_verified(
         .await
 }
 
+pub async fn decrement_spam_count_if_verified(
+    db: &DatabaseConnection,
+    chat_id: i64,
+    user_id: i64,
+) -> Result<Option<i64>, DbErr> {
+    use sea_orm::TransactionTrait;
+    let txn = db.begin().await?;
+    let row = Entity::find()
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .one(&txn)
+        .await?;
+    let Some(row) = row else {
+        txn.rollback().await?;
+        return Ok(None);
+    };
+    let new_count = (row.spam_counts - 1).max(0);
+    Entity::update_many()
+        .col_expr(Column::SpamCounts, new_count.into())
+        .filter(Column::ChatId.eq(chat_id))
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Status.eq(SessionStatus::Verified))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    Ok(Some(new_count))
+}
+
 pub async fn count_by_status_since(
     db: &DatabaseConnection,
     chat_id: i64,

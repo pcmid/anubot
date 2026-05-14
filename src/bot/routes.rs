@@ -20,7 +20,7 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
 
     verify::spawn_expiry_worker(state.clone());
 
-    let command_messgaes = dptree::entry()
+    let command_messages = dptree::entry()
         .filter_map_async(commands::filter_admin_command)
         .endpoint(commands::on_command);
 
@@ -52,7 +52,7 @@ pub async fn run_dispatcher(state: Arc<AppState>) {
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
-                .branch(command_messgaes)
+                .branch(command_messages)
                 .branch(private_messages)
                 .branch(group_messages),
         )
@@ -81,6 +81,7 @@ async fn register_commands(state: &AppState) -> Result<(), RequestError> {
         BotCommand::new("settings", CMD_SETTINGS),
         BotCommand::new("ban", CMD_BAN),
         BotCommand::new("test_spam", CMD_TEST_SPAM),
+        BotCommand::new("unspam", CMD_UNSPAM),
     ];
     state
         .telegram

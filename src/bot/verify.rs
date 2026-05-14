@@ -272,7 +272,7 @@ async fn on_verify_start(
 }
 
 fn generate_verify_token() -> String {
-    let mut bytes = [0_u8; 8];
+    let mut bytes = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -325,6 +325,49 @@ async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
 
         if row_count < EXPIRY_BATCH_LIMIT {
             return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn parse_start_payload_never_panics(text in ".{0,200}") {
+            let _ = parse_start_payload(&text);
+        }
+
+        #[test]
+        fn parse_start_payload_verify_roundtrip(chat_id in any::<i64>()) {
+            let text = format!("/start {chat_id}");
+            prop_assert_eq!(parse_start_payload(&text), Some(StartPayload::Verify(chat_id)));
+        }
+
+        #[test]
+        fn parse_start_payload_settings_roundtrip(chat_id in any::<i64>()) {
+            let text = format!("/start settings_{chat_id}");
+            prop_assert_eq!(parse_start_payload(&text), Some(StartPayload::Settings(chat_id)));
+        }
+
+        #[test]
+        fn parse_start_payload_with_at_bot_works(
+            chat_id in any::<i64>(),
+            bot_name in "[A-Za-z0-9_]{4,32}",
+        ) {
+            let text = format!("/start@{bot_name} {chat_id}");
+            prop_assert_eq!(parse_start_payload(&text), Some(StartPayload::Verify(chat_id)));
+        }
+
+        #[test]
+        fn parse_start_payload_rejects_non_start(
+            cmd in "/(stop|status|enable|disable|foo|bar)",
+            chat_id in any::<i64>(),
+        ) {
+            let text = format!("{cmd} {chat_id}");
+            prop_assert_eq!(parse_start_payload(&text), None);
         }
     }
 }

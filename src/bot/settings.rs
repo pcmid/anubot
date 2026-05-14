@@ -365,6 +365,9 @@ fn parse_callback(data: &str) -> Option<CallbackAction> {
         if field != "provider" {
             return None;
         }
+        if !PROVIDER_BUTTONS.iter().any(|(_, v)| *v == value) {
+            return None;
+        }
         return Some(CallbackAction::SetProvider {
             chat_id,
             value: value.to_string(),
@@ -491,11 +494,16 @@ fn display_field(v: Option<&str>) -> String {
 }
 
 fn display_key(v: Option<&str>) -> String {
-    match v {
-        None => SETTINGS_UNSET.to_string(),
-        Some(s) if s.len() <= 8 => "***".to_string(),
-        Some(s) => format!("{}...{}", &s[..4], &s[s.len() - 4..]),
+    let Some(s) = v else {
+        return SETTINGS_UNSET.to_string();
+    };
+    let total_chars = s.chars().count();
+    if total_chars <= 8 {
+        return "***".to_string();
     }
+    let head: String = s.chars().take(4).collect();
+    let tail: String = s.chars().skip(total_chars - 4).collect();
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]
@@ -540,11 +548,70 @@ mod tests {
     }
 
     #[test]
+    fn parse_callback_setval_unknown_provider_rejected() {
+        assert!(parse_callback("setval:42:provider:bogus_provider").is_none());
+    }
+
+    #[test]
     fn parse_callback_test_roundtrip() {
         let CallbackAction::Test { chat_id } = parse_callback("test:-1003900460608").unwrap()
         else {
             panic!("expected Test");
         };
         assert_eq!(chat_id, -1003900460608);
+    }
+
+    #[test]
+    fn display_key_redacts_short_value() {
+        assert_eq!(display_key(Some("short")), "***");
+        assert_eq!(display_key(Some("12345678")), "***");
+    }
+
+    #[test]
+    fn display_key_shows_head_tail_for_long_value() {
+        assert_eq!(display_key(Some("sk-abcdefghij")), "sk-a...ghij");
+    }
+
+    #[test]
+    fn display_key_handles_multibyte_chars() {
+        // Was a byte-slice panic on master: byte offset 4 lands mid-codepoint.
+        let key = "中文中abcdefgh";
+        let out = display_key(Some(key));
+        assert!(out.contains("..."));
+    }
+
+    #[test]
+    fn display_key_unset_marker() {
+        assert_eq!(display_key(None), SETTINGS_UNSET);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn parse_callback_never_panics(data in ".{0,200}") {
+            let _ = parse_callback(&data);
+        }
+
+        #[test]
+        fn parse_tag_never_panics(text in ".{0,300}") {
+            let _ = parse_tag(&text);
+        }
+
+        #[test]
+        fn parse_callback_setval_provider_roundtrip_proptest(
+            chat_id in any::<i64>(),
+            idx in 0usize..PROVIDER_BUTTONS.len(),
+        ) {
+            let value = PROVIDER_BUTTONS[idx].1;
+            let data = format!("setval:{chat_id}:provider:{value}");
+            match parse_callback(&data) {
+                Some(CallbackAction::SetProvider { chat_id: parsed, value: parsed_value }) => {
+                    prop_assert_eq!(parsed, chat_id);
+                    prop_assert_eq!(parsed_value, value);
+                }
+                other => prop_assert!(false, "expected SetProvider, got {:?}", other),
+            }
+        }
     }
 }
