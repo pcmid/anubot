@@ -188,6 +188,8 @@ pub enum CommandReply {
     NotRegistered,
     NotSupergroup,
     InvalidTimeout,
+    WelcomeTooLong,
+    ButtonTooLong,
     Status {
         enabled: bool,
         timeout_seconds: i64,
@@ -199,6 +201,8 @@ pub enum CommandReply {
 pub const TIMEOUT_MIN: i64 = 60;
 pub const TIMEOUT_MAX: i64 = 3600;
 pub const STATUS_WINDOW_SECONDS: i64 = 86_400;
+pub const WELCOME_MAX_CHARS: usize = 3500;
+pub const BUTTON_MAX_CHARS: usize = 64;
 
 pub async fn handle_command(
     db: &DatabaseConnection,
@@ -231,10 +235,20 @@ pub async fn handle_command(
             Ok(CommandReply::Ok)
         }
         Command::SetWelcome(text) => {
+            if let Some(t) = text.as_deref()
+                && t.chars().count() > WELCOME_MAX_CHARS
+            {
+                return Ok(CommandReply::WelcomeTooLong);
+            }
             group::set_welcome(db, chat_id, text.as_deref()).await?;
             Ok(CommandReply::Ok)
         }
         Command::SetButton(text) => {
+            if let Some(t) = text.as_deref()
+                && t.chars().count() > BUTTON_MAX_CHARS
+            {
+                return Ok(CommandReply::ButtonTooLong);
+            }
             group::set_button(db, chat_id, text.as_deref()).await?;
             Ok(CommandReply::Ok)
         }
@@ -288,6 +302,14 @@ pub fn render_reply(reply: CommandReply, bot_username: &str) -> String {
         ),
         CommandReply::NotSupergroup => REPLY_NOT_SUPERGROUP.to_string(),
         CommandReply::InvalidTimeout => REPLY_INVALID_TIMEOUT.to_string(),
+        CommandReply::WelcomeTooLong => fill(
+            REPLY_WELCOME_TOO_LONG_TEMPLATE,
+            &[("max", &WELCOME_MAX_CHARS.to_string())],
+        ),
+        CommandReply::ButtonTooLong => fill(
+            REPLY_BUTTON_TOO_LONG_TEMPLATE,
+            &[("max", &BUTTON_MAX_CHARS.to_string())],
+        ),
         CommandReply::Status {
             enabled,
             timeout_seconds,
