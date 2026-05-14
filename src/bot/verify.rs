@@ -28,12 +28,13 @@ pub async fn on_chat_member_joined(
 
     let chat_id = update.chat.id.0;
     let chat_title = update.chat.title().unwrap_or("").to_string();
-    tracing::info!(
+    tracing::info!(chat_id, user_id = user.id.0, "user joined group");
+    tracing::debug!(
         chat_id,
         chat_title = %chat_title,
         user_id = user.id.0,
         user_first_name = %user.first_name,
-        "user joined group",
+        "user joined group (details)",
     );
     verification(
         &state,
@@ -85,12 +86,13 @@ pub async fn on_chat_join_request(
         );
         return Ok(());
     }
-    tracing::info!(
+    tracing::info!(chat_id, user_id, "join request approved");
+    tracing::debug!(
         chat_id,
         chat_title = %chat_title,
         user_id,
         user_first_name = %user.first_name,
-        "join request approved",
+        "join request approved (details)",
     );
 
     Ok(())
