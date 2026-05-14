@@ -40,12 +40,13 @@ pub async fn app_page(
         );
     }
 
-    tracing::info!(
+    tracing::info!(chat_id, user_id, "user verification passed");
+    tracing::debug!(
         chat_id,
         user_id,
         chat_title = %session.chat_title,
         user_first_name = %session.user_first_name,
-        "user verification passed",
+        "user verification passed (details)",
     );
 
     if let Some(msg_id) = session.verify_msg_id {
