@@ -277,7 +277,7 @@ fn generate_verify_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn spawn_expiry_worker(state: Arc<AppState>) {
+pub fn spawn_expiry_worker(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(EXPIRY_POLL_SECONDS));
         loop {
@@ -286,7 +286,7 @@ pub fn spawn_expiry_worker(state: Arc<AppState>) {
                 tracing::warn!(error = %err, "expiry worker failed");
             }
         }
-    });
+    })
 }
 
 async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
