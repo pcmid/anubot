@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::future::Future;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::*;
@@ -16,14 +18,26 @@ use crate::util::html;
 const TG_MAX_ATTEMPTS: u32 = 3;
 const TG_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 
+const IS_PRIVILEGED_TTL: Duration = Duration::from_secs(60);
+
 #[derive(Clone)]
 pub struct TelegramGateway {
     inner: Teloxide,
+    is_privileged_cache: Arc<Mutex<HashMap<(i64, u64), CacheEntry>>>,
+}
+
+#[derive(Clone, Copy)]
+struct CacheEntry {
+    value: bool,
+    inserted_at: Instant,
 }
 
 impl TelegramGateway {
     pub fn new(inner: Teloxide) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            is_privileged_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn client(&self) -> Teloxide {
@@ -157,13 +171,39 @@ impl TelegramGateway {
         chat_id: ChatId,
         user_id: UserId,
     ) -> Result<bool, RequestError> {
-        with_retries("get_chat_member", || async {
+        let key = (chat_id.0, user_id.0);
+        let now = Instant::now();
+
+        if let Some(value) = self.is_privileged_cached(key, now) {
+            return Ok(value);
+        }
+
+        let value = with_retries("get_chat_member", || async {
             self.inner
                 .get_chat_member(chat_id, user_id)
                 .await
                 .map(|m| m.is_privileged())
         })
-        .await
+        .await?;
+
+        self.cache_is_privileged(key, value, now);
+        Ok(value)
+    }
+
+    fn is_privileged_cached(&self, key: (i64, u64), now: Instant) -> Option<bool> {
+        let cache = self.is_privileged_cache.lock().ok()?;
+        let entry = cache.get(&key)?;
+        if now.duration_since(entry.inserted_at) < IS_PRIVILEGED_TTL {
+            Some(entry.value)
+        } else {
+            None
+        }
+    }
+
+    fn cache_is_privileged(&self, key: (i64, u64), value: bool, inserted_at: Instant) {
+        if let Ok(mut cache) = self.is_privileged_cache.lock() {
+            cache.insert(key, CacheEntry { value, inserted_at });
+        }
     }
 
     pub async fn reply_to(
