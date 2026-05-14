@@ -12,6 +12,9 @@ use crate::db::{group, session};
 use crate::util::time::now_epoch;
 
 pub async fn filter_admin_command(msg: Message, state: Arc<AppState>) -> Option<Command> {
+    if msg.chat.is_private() {
+        return None;
+    }
     let from = msg.from.as_ref()?;
     let entities = msg.parse_entities()?;
     let first = entities.first()?;
