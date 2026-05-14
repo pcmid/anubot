@@ -60,39 +60,49 @@ pub async fn on_chat_join_request(
     let user_id = user.id.0 as i64;
     let chat_title = request.chat.title().unwrap_or("").to_string();
 
+    tracing::info!(chat_id, user_id, "join_request: received");
+
     let Some(group) = group::get(&state.db, chat_id).await? else {
+        tracing::info!(chat_id, user_id, "join_request: group unknown — ignoring");
         return Ok(());
     };
     if !group.enabled {
+        tracing::info!(
+            chat_id,
+            user_id,
+            "join_request: verification disabled for this chat — ignoring",
+        );
         return Ok(());
     }
 
+    tracing::info!(chat_id, user_id, "join_request: step=restrict");
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
         tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request restrict failed after retries; bot likely lacks restrict-member permission — not approving",
+            "join_request: restrict failed before approve; bot likely lacks restrict-member permission — not approving",
         );
         return Ok(());
     }
 
+    tracing::info!(chat_id, user_id, "join_request: step=approve");
     if let Err(err) = state.telegram.approve_join_request(chat_id, user_id).await {
         tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request approve failed after retries; bot likely lacks invite-users permission",
+            "join_request: approve failed after retries; bot likely lacks invite-users permission",
         );
         return Ok(());
     }
-    tracing::info!(chat_id, user_id, "join request approved");
+    tracing::info!(chat_id, user_id, "join_request: approved");
     tracing::debug!(
         chat_id,
         chat_title = %chat_title,
         user_id,
         user_first_name = %user.first_name,
-        "join request approved (details)",
+        "join_request: approved (details)",
     );
 
     Ok(())
