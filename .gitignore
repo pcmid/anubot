@@ -1,3 +1,47 @@
+# Cargo / Rust
 /target
-deploy/data/
+**/*.rs.bk
+*.pdb
+
+# Local secrets and deploy state
 .env
+.env.local
+.env.*.local
+deploy/data/
+
+# SQLite local artifacts (in case anyone runs the bot outside Docker)
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Backups
+*.bak
+*.orig
+*.rej
+
+# Coverage / profiling
+/coverage
+lcov.info
+cobertura.xml
+tarpaulin-report.html
+flamegraph.svg
+perf.data*
