@@ -8,6 +8,7 @@ use teloxide::{Bot as Teloxide, RequestError};
 use url::Url;
 
 use crate::bot::text::{FORCE_REPLY_PLACEHOLDER, fill};
+use crate::util::html;
 
 #[derive(Clone)]
 pub struct TelegramGateway {
@@ -81,7 +82,7 @@ impl TelegramGateway {
         let mention = format!(
             r#"<a href="tg://user?id={id}">{name}</a>"#,
             id = user_id,
-            name = html_escape(user_first_name),
+            name = html::escape(user_first_name),
         );
         let text = fill(text_template, &[("user", &mention)]);
         let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
@@ -184,19 +185,4 @@ impl TelegramGateway {
 
 fn to_user_id(id: i64) -> UserId {
     UserId(id.max(0) as u64)
-}
-
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
