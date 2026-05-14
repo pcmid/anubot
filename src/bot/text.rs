@@ -90,6 +90,8 @@ pub const REPLY_TEST_SPAM_NEED_REPLY: &str = "请回复一条消息后使用 /te
 pub const REPLY_TEST_SPAM_NO_TEXT: &str = "被回复消息没有可检查的文本。";
 pub const REPLY_TEST_SPAM_MISSING_CONFIG: &str = "请先配置完整 AI 检查。";
 pub const REPLY_TEST_SPAM_FAILED_TEMPLATE: &str = "AI 检查失败:{error}";
+pub const REPLY_WELCOME_TOO_LONG_TEMPLATE: &str = "欢迎语过长,最长 {max} 个字符。";
+pub const REPLY_BUTTON_TOO_LONG_TEMPLATE: &str = "按钮文字过长,最长 {max} 个字符。";
 
 pub const FORCE_REPLY_PLACEHOLDER: &str = "在此输入...";
 
