@@ -68,21 +68,21 @@ pub async fn on_chat_join_request(
     }
 
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request restrict failed; not approving",
+            "join request restrict failed after retries; bot likely lacks restrict-member permission — not approving",
         );
         return Ok(());
     }
 
     if let Err(err) = state.telegram.approve_join_request(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id,
             user_id,
             error = %err,
-            "join request approve failed",
+            "join request approve failed after retries; bot likely lacks invite-users permission",
         );
         return Ok(());
     }
@@ -120,9 +120,9 @@ async fn verification(
     }
 
     if let Err(err) = state.telegram.restrict_member(chat_id, user_id).await {
-        tracing::warn!(
+        tracing::error!(
             chat_id, user_id, error = %err,
-            "restrict_member failed; skipping verification",
+            "restrict_member failed after retries; bot likely lacks restrict-member permission in this chat — skipping verification",
         );
         return Ok(());
     }
@@ -161,12 +161,26 @@ async fn verification(
         .await
     {
         Ok(m) => m,
-        Err(err) => {
+        Err(send_err) => {
             tracing::warn!(
-                chat_id, user_id, error = %err,
-                "send verification message failed; kicking user",
+                chat_id, user_id, error = %send_err,
+                "send verification message failed; trying to kick",
             );
-            let _ = state.telegram.kick_member(chat_id, user_id).await;
+            if let Err(kick_err) = state.telegram.kick_member(chat_id, user_id).await {
+                tracing::error!(
+                    chat_id, user_id,
+                    send_error = %send_err, kick_error = %kick_err,
+                    "send AND kick both failed; attempting unrestrict so the member is not stuck muted",
+                );
+                if let Err(unrestrict_err) =
+                    state.telegram.unrestrict_member(chat_id, user_id).await
+                {
+                    tracing::error!(
+                        chat_id, user_id, error = %unrestrict_err,
+                        "unrestrict also failed; member is muted with no session — manual intervention required",
+                    );
+                }
+            }
             return Ok(());
         }
     };
@@ -314,9 +328,9 @@ async fn expire_due_sessions(state: &Arc<AppState>) -> Result<(), DbErr> {
             }
 
             if let Err(err) = state.telegram.kick_member(row.chat_id, row.user_id).await {
-                tracing::warn!(
+                tracing::error!(
                     chat_id = row.chat_id, user_id = row.user_id, error = %err,
-                    "expiry: kick_member failed",
+                    "expiry: kick_member failed after retries; bot likely lacks ban-users permission in this chat",
                 );
             }
 
